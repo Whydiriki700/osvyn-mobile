@@ -1,0 +1,6 @@
+*.apk
+*.idsig
+*.keystore
+signing-backup/
+app/build/
+.gradle/

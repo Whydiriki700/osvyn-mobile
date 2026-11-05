@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="id.riki.osvyn.mobile">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Osvyn Mobile"
+        android:theme="@style/AppTheme"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".SplashActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
+
+        <service
+            android:name=".WatchService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Each profile runs in its own process so Android gives it a fully
+             separate WebView data directory (cookies, local storage, cache).
+             One activity class per slot, all sharing BaseProfileActivity. -->
+        <activity android:name=".Profile1Activity"  android:exported="false" android:process=":profile1"  android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity android:name=".Profile2Activity"  android:exported="false" android:process=":profile2"  android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity android:name=".Profile3Activity"  android:exported="false" android:process=":profile3"  android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity android:name=".Profile4Activity"  android:exported="false" android:process=":profile4"  android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity android:name=".Profile5Activity"  android:exported="false" android:process=":profile5"  android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity android:name=".Profile6Activity"  android:exported="false" android:process=":profile6"  android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity android:name=".Profile7Activity"  android:exported="false" android:process=":profile7"  android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity android:name=".Profile8Activity"  android:exported="false" android:process=":profile8"  android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity android:name=".Profile9Activity"  android:exported="false" android:process=":profile9"  android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity android:name=".Profile10Activity" android:exported="false" android:process=":profile10" android:configChanges="orientation|screenSize|keyboardHidden" />
+
+    </application>
+</manifest>

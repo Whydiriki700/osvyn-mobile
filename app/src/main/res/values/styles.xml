@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light theme matching the desktop Hub (#FBFBFC surface, #101014 ink).
+         Profile screens paint their own dark bar over this. -->
+    <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FBFBFC</item>
+        <item name="android:statusBarColor">#FFFFFF</item>
+        <item name="android:navigationBarColor">#FBFBFC</item>
+        <item name="android:colorAccent">#2B6FF2</item>
+        <item name="android:textColorPrimary">#101014</item>
+        <item name="android:textColorSecondary">#83878F</item>
+    </style>
+</resources>
