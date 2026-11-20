@@ -586,6 +586,10 @@ public abstract class BaseProfileActivity extends Activity {
             try {
                 byte[] bytes = Base64.decode(sb.toString(), Base64.DEFAULT);
                 String where = saveDownload(meta[0], meta[1], bytes);
+                // Download history (1.5.0): the Hub lists what came
+                // down through the app and reopens it from there.
+                HubState.addDownload(BaseProfileActivity.this, meta[0], meta[1],
+                        bytes.length, myProfileName);
                 toastOnUi("Saved to " + where);
             } catch (Exception e) {
                 toastOnUi("Download failed: " + e.getClass().getSimpleName());
@@ -603,6 +607,13 @@ public abstract class BaseProfileActivity extends Activity {
     private class NotifyBridge {
         @JavascriptInterface
         public void onUnread(int count, String sig, String snippet) {
+            // The shared unread count feeds the Hub badge and the home
+            // screen widget (1.5.0), so it is recorded even when the
+            // sounding notification below is suppressed or deduped.
+            if (mySlotValue > 0) {
+                HubState.setUnread(BaseProfileActivity.this, mySlotValue, count);
+                UnreadWidget.refresh(BaseProfileActivity.this);
+            }
             if (inForeground || mySlotValue <= 0) return;
             long now = System.currentTimeMillis();
             String s = sig == null ? "" : sig;
@@ -616,7 +627,11 @@ public abstract class BaseProfileActivity extends Activity {
         @JavascriptInterface
         public void onAllRead() {
             lastNotifiedSig = "";
-            if (mySlotValue > 0) Notify.cancelForSlot(BaseProfileActivity.this, mySlotValue);
+            if (mySlotValue > 0) {
+                HubState.setUnread(BaseProfileActivity.this, mySlotValue, 0);
+                UnreadWidget.refresh(BaseProfileActivity.this);
+                Notify.cancelForSlot(BaseProfileActivity.this, mySlotValue);
+            }
         }
     }
 
@@ -719,6 +734,18 @@ public abstract class BaseProfileActivity extends Activity {
               var obs = null;
               var titleObs = null;
               var timer = null;
+              // Eco mode (1.5.0): the Hub switch stretches the periodic
+              // scan from 15 s to 60 s. The observer path stays as is,
+              // so a visible change is still noticed quickly; what gets
+              // rarer is the blind re-scan, which is the battery cost.
+              var scanMs = 15000;
+              window.__osvynSetEco = function (v) {
+                scanMs = v ? 60000 : 15000;
+                if (timer !== null) {
+                  clearInterval(timer);
+                  timer = setInterval(scan, scanMs);
+                }
+              };
               function startWatching() {
                 if (obs) return;
                 try {
@@ -730,7 +757,7 @@ public abstract class BaseProfileActivity extends Activity {
                     titleObs.observe(titleEl, {childList: true, characterData: true});
                   }
                 } catch (e) {}
-                timer = setInterval(scan, 15000);
+                timer = setInterval(scan, scanMs);
               }
               function stopWatching() {
                 if (obs) { try { obs.disconnect(); } catch (e) {} obs = null; }
@@ -891,6 +918,18 @@ public abstract class BaseProfileActivity extends Activity {
         webView.evaluateJavascript(
                 "window.__osvynSetWatcherSuspended && window.__osvynSetWatcherSuspended("
                         + ((inForeground || callFrozen) ? "true" : "false") + ")", null);
+        applyEco();
+    }
+
+    /** Eco mode (1.5.0): pass the Hub switch into the watcher. Read
+     *  fresh from the shared state on every lifecycle pass, so the
+     *  switch takes effect the next time a profile is opened or
+     *  backgrounded, with no restart. */
+    private void applyEco() {
+        if (webView == null) return;
+        webView.evaluateJavascript(
+                "window.__osvynSetEco && window.__osvynSetEco("
+                        + (HubState.eco(this) ? "true" : "false") + ")", null);
     }
 
     /**
@@ -1079,6 +1118,8 @@ public abstract class BaseProfileActivity extends Activity {
         if (mySlotValue > 0) {
             // Reading the profile clears its message notification.
             Notify.cancelForSlot(this, mySlotValue);
+            HubState.setUnread(this, mySlotValue, 0);
+            UnreadWidget.refresh(this);
             lastNotifiedSig = "";
         }
         if (webView != null) {

@@ -19,6 +19,7 @@ import android.os.Build;
 public final class Notify {
 
     public static final String CH_MESSAGES = "muse_messages";
+    public static final String CH_MESSAGES_SILENT = "muse_messages_quiet";
     public static final String CH_WATCHER = "watcher";
     public static final int WATCHER_ID = 9001;
 
@@ -42,6 +43,16 @@ public final class Notify {
         msgs.setVibrationPattern(new long[]{0, 180, 120, 180});
         msgs.enableLights(true);
         nm.createNotificationChannel(msgs);
+
+        // Quiet hours channel (1.5.0): same messages, no sound, no
+        // vibration, low importance, used while quiet hours are on.
+        NotificationChannel quiet = new NotificationChannel(
+                CH_MESSAGES_SILENT, "Muse messages (quiet hours)",
+                NotificationManager.IMPORTANCE_LOW);
+        quiet.setDescription("New messages while quiet hours are on arrive silently");
+        quiet.setSound(null, null);
+        quiet.enableVibration(false);
+        nm.createNotificationChannel(quiet);
 
         NotificationChannel watcher = new NotificationChannel(
                 CH_WATCHER, "Watcher", NotificationManager.IMPORTANCE_LOW);
@@ -77,7 +88,9 @@ public final class Notify {
             text = snippet.trim();
         }
 
-        Notification n = new Notification.Builder(ctx, CH_MESSAGES)
+        boolean quiet = HubState.quietNow(ctx);
+        Notification.Builder b = new Notification.Builder(
+                ctx, quiet ? CH_MESSAGES_SILENT : CH_MESSAGES)
                 .setSmallIcon(R.drawable.ic_stat_muse)
                 .setContentTitle(profileName + " · Muse")
                 .setContentText(text)
@@ -85,11 +98,12 @@ public final class Notify {
                 .setContentIntent(pi)
                 .setAutoCancel(true)
                 .setCategory(Notification.CATEGORY_MESSAGE)
-                .setPriority(Notification.PRIORITY_HIGH)
-                .setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE
-                        | Notification.DEFAULT_LIGHTS)
-                .build();
-        nm.notify(notifIdForSlot(slot), n);
+                .setPriority(quiet ? Notification.PRIORITY_LOW : Notification.PRIORITY_HIGH);
+        if (!quiet) {
+            b.setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE
+                    | Notification.DEFAULT_LIGHTS);
+        }
+        nm.notify(notifIdForSlot(slot), b.build());
     }
 
     public static void cancelForSlot(Context ctx, int slot) {

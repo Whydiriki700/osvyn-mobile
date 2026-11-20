@@ -6,7 +6,9 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 
 import java.util.List;
 
@@ -37,11 +39,39 @@ public class WatchService extends Service {
         }
     }
 
+    // Manual freeze heartbeat (1.5.0): while the Hub's "freeze other
+    // profiles" switch is on, this service (always alive in the main
+    // process) refreshes the shared call marker under the reserved
+    // owner "hub-manual", so background profiles stay frozen until
+    // the switch is turned off. If the service dies, the marker goes
+    // stale and everyone unfreezes on their own within seconds.
+    private final Handler freezeHandler = new Handler(Looper.getMainLooper());
+    private final Runnable freezeTick = new Runnable() {
+        @Override public void run() {
+            try {
+                if (HubState.manualFreeze(WatchService.this)) {
+                    CallMode.setActive(WatchService.this, "hub-manual", true);
+                } else if ("hub-manual".equals(CallMode.freshOwner(WatchService.this))) {
+                    CallMode.setActive(WatchService.this, "hub-manual", false);
+                }
+            } catch (Exception ignored) {
+            }
+            freezeHandler.postDelayed(this, 5000);
+        }
+    };
+
     @Override
     public void onCreate() {
         super.onCreate();
         Notify.ensureChannels(this);
         startForeground(Notify.WATCHER_ID, buildNotification());
+        freezeHandler.postDelayed(freezeTick, 5000);
+    }
+
+    @Override
+    public void onDestroy() {
+        freezeHandler.removeCallbacks(freezeTick);
+        super.onDestroy();
     }
 
     @Override

@@ -3,7 +3,14 @@ package id.riki.osvyn.mobile;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ContentUris;
 import android.content.Intent;
+import android.database.Cursor;
+import android.net.Uri;
+import android.os.Environment;
+import android.provider.MediaStore;
+import android.text.InputType;
+import android.webkit.MimeTypeMap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -24,6 +31,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -36,28 +44,87 @@ import java.util.List;
  */
 public class MainActivity extends Activity {
 
-    // Desktop Hub palette
-    private static final int INK = 0xFF101014;
-    private static final int INK2 = 0xFF3C3F47;
-    private static final int INK3 = 0xFF83878F;
-    private static final int GARIS = 0xFFE2E2E8;
-    private static final int BG = 0xFFFBFBFC;
-    private static final int PANEL = 0xFFFFFFFF;
+    // Desktop Hub palette. The theme-varying colors are fields, not
+    // constants, since 1.5.0: applyTheme() reassigns them to the dark
+    // set when the phone is in night mode, before any view is built.
+    private int INK = 0xFF101014;
+    private int INK2 = 0xFF3C3F47;
+    private int INK3 = 0xFF83878F;
+    private int GARIS = 0xFFE2E2E8;
+    private int BG = 0xFFFBFBFC;
+    private int PANEL = 0xFFFFFFFF;
     private static final int BLUE = 0xFF2B6FF2;
     private static final int BLUE_DARK = 0xFF1E56C8;
     private static final int CYAN = 0xFF15B3DA;
-    private static final int GREEN = 0xFF1D9E57;
-    private static final int GREEN_BG = 0xFFE5F6EC;
-    private static final int GRAY_BG = 0xFFF1F1F4;
-    private static final int YELLOW = 0xFF8A5C00;
-    private static final int YELLOW_BG = 0xFFFDF3E0;
-    private static final int RED = 0xFFB3372F;
-    private static final int RED_BG = 0xFFFDECEA;
+    private int GREEN = 0xFF1D9E57;
+    private int GREEN_BG = 0xFFE5F6EC;
+    private int GRAY_BG = 0xFFF1F1F4;
+    private int YELLOW = 0xFF8A5C00;
+    private int YELLOW_BG = 0xFFFDF3E0;
+    private int RED = 0xFFB3372F;
+    private int RED_BG = 0xFFFDECEA;
+    private boolean darkTheme = false;
+
+    /** Dark Hub theme (1.5.0): follows the phone's night mode. Only
+     *  the app chrome changes; Muse pages keep the site's own look. */
+    private void applyTheme() {
+        int night = getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+        darkTheme = night == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        if (!darkTheme) return;
+        INK = 0xFFF4F4F6;
+        INK2 = 0xFFC9CCD4;
+        INK3 = 0xFF83878F;
+        GARIS = 0xFF26262E;
+        BG = 0xFF0E0E11;
+        PANEL = 0xFF17171C;
+        GREEN = 0xFF3ECF7E;
+        GREEN_BG = 0xFF14301F;
+        GRAY_BG = 0xFF1E1E24;
+        YELLOW = 0xFFF2C14E;
+        YELLOW_BG = 0xFF33270F;
+        RED = 0xFFF08A84;
+        RED_BG = 0xFF3A1D1B;
+    }
 
     private LinearLayout listBox;
     private TextView statsText;
     private List<ProfileStore.Profile> profiles = new ArrayList<>();
     private boolean shiftShowing = false;
+    // 1.5.0 Hub live state: settings controls + update banner + a 3 s
+    // signature loop that re-renders only when something changed.
+    private final Handler hubHandler = new Handler(Looper.getMainLooper());
+    private String lastHubSignature = "";
+    private TextView updateBanner;
+    private TextView freezeDesc;
+    private Button freezeBtn;
+    private TextView quietDesc;
+    private Button quietBtn;
+    private Button quietSetBtn;
+    private TextView ecoDesc;
+    private Button ecoBtn;
+    private TextView lockDesc;
+    private Button lockBtn;
+    private Button lockPinBtn;
+    private static final int REQ_EXPORT = 8001;
+    private static final int REQ_IMPORT = 8002;
+    private final Runnable hubTick = new Runnable() {
+        @Override public void run() {
+            String sig = hubSignature();
+            if (!sig.equals(lastHubSignature)) {
+                lastHubSignature = sig;
+                refresh();
+            }
+            hubHandler.postDelayed(this, 3000);
+        }
+    };
+
+    private String hubSignature() {
+        return CallMode.freshOwner(this) + "|" + HubState.totalUnread(this)
+                + "|" + HubState.manualFreeze(this) + "|" + HubState.quietEnabled(this)
+                + "|" + HubState.eco(this) + "|" + HubState.lockEnabled(this)
+                + "|" + HubState.latestVersion(this);
+    }
     // Smoothness (1.4.1): profile rows animate in only on the first
     // Hub render. Replaying the staggered entrance on every onResume
     // made returning to the Hub feel slow; later refreshes are instant.
@@ -87,6 +154,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        applyTheme();
         Notify.ensureChannels(this);
         WatchService.start(this);
         if (Build.VERSION.SDK_INT >= 33
@@ -97,9 +165,10 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {
             }
         }
-        getWindow().setStatusBarColor(0xFFFFFFFF);
+        getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
-        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+        getWindow().getDecorView().setSystemUiVisibility(
+                darkTheme ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
 
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(BG);
@@ -227,7 +296,87 @@ public class MainActivity extends Activity {
             root.addView(hint);
         }
 
-        TextView foot = tv("Osvyn Mobile 1.4.4 - max " + ProfileStore.MAX_PROFILES + " profiles", 11, INK3, null);
+        // Update banner (1.5.0): hidden unless the repo carries a
+        // newer version than the installed one.
+        updateBanner = tv("", 12.5f, BLUE_DARK, Typeface.create("sans-serif", Typeface.BOLD));
+        updateBanner.setBackground(Ui.press(GREEN_BG, 0xFFD3EDDD, dp(9), 0));
+        updateBanner.setPadding(dp(12), dp(9), dp(12), dp(9));
+        updateBanner.setVisibility(View.GONE);
+        LinearLayout.LayoutParams ublp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ublp.topMargin = dp(16);
+        updateBanner.setLayoutParams(ublp);
+        updateBanner.setOnClickListener(v -> {
+            Ui.haptic(v);
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW,
+                        android.net.Uri.parse("https://t.me/osvynofficialbot")));
+            } catch (Exception ignored) {
+            }
+        });
+        root.addView(updateBanner);
+
+        // Settings section (1.5.0): every switch writes the shared
+        // HubState the other processes read.
+        TextView setSection = tv("SETTINGS", 11, INK3, Typeface.create("sans-serif", Typeface.BOLD));
+        setSection.setLetterSpacing(0.08f);
+        LinearLayout.LayoutParams sslp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        sslp.topMargin = dp(22);
+        sslp.bottomMargin = dp(4);
+        setSection.setLayoutParams(sslp);
+        root.addView(setSection);
+
+        TextView[] d1 = new TextView[1];
+        Button[] b1 = new Button[1];
+        root.addView(settingRow("Freeze other profiles",
+                "Freeze every other profile at once, as if a call was on. Their notifications pause until released.",
+                d1, b1, "Freeze", v -> toggleFreeze(), null, null, null));
+        freezeDesc = d1[0];
+        freezeBtn = b1[0];
+
+        TextView[] d2 = new TextView[1];
+        Button[] b2 = new Button[1];
+        Button[] b2b = new Button[1];
+        root.addView(settingRow("Quiet hours",
+                "Messages still arrive, but silently, inside the window.",
+                d2, b2, "Off", v -> toggleQuiet(), b2b, "Set", v -> showQuietDialog()));
+        quietDesc = d2[0];
+        quietBtn = b2[0];
+        quietSetBtn = b2b[0];
+
+        TextView[] d3 = new TextView[1];
+        Button[] b3 = new Button[1];
+        root.addView(settingRow("Eco mode",
+                "Stretches background message scans from 15 s to 60 s. Easier on the battery.",
+                d3, b3, "Off", v -> toggleEco(), null, null, null));
+        ecoDesc = d3[0];
+        ecoBtn = b3[0];
+
+        TextView[] d4 = new TextView[1];
+        Button[] b4 = new Button[1];
+        Button[] b4b = new Button[1];
+        root.addView(settingRow("App lock",
+                "A PIN, or your fingerprint, is required to open Osvyn.",
+                d4, b4, "Off", v -> toggleLock(), b4b, "PIN", v -> showPinDialog()));
+        lockDesc = d4[0];
+        lockBtn = b4[0];
+        lockPinBtn = b4b[0];
+
+        TextView[] d5 = new TextView[1];
+        Button[] b5 = new Button[1];
+        root.addView(settingRow("Downloads",
+                "Files downloaded through the app, reopenable from here.",
+                d5, b5, "View", v -> showDownloads(), null, null, null));
+
+        TextView[] d6 = new TextView[1];
+        Button[] b6 = new Button[1];
+        Button[] b6b = new Button[1];
+        root.addView(settingRow("Profiles backup",
+                "Export the profile list to a file, or import it on another phone. Sign-ins never travel; each profile signs in again there.",
+                d6, b6, "Export", v -> startExport(), b6b, "Import", v -> startImport()));
+
+        TextView foot = tv("Osvyn Mobile 1.5.0 - max " + ProfileStore.MAX_PROFILES + " profiles", 11, INK3, null);
         foot.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -258,6 +407,16 @@ public class MainActivity extends Activity {
         super.onResume();
         finishPendingWipes();
         refresh();
+        maybeCheckUpdate();
+        lastHubSignature = hubSignature();
+        hubHandler.removeCallbacks(hubTick);
+        hubHandler.postDelayed(hubTick, 3000);
+    }
+
+    @Override
+    protected void onPause() {
+        hubHandler.removeCallbacks(hubTick);
+        super.onPause();
     }
 
     private void finishPendingWipes() {
@@ -290,9 +449,12 @@ public class MainActivity extends Activity {
         profiles = ProfileStore.load(this);
         int opened = 0;
         for (ProfileStore.Profile p : profiles) if (p.opened > 0) opened++;
+        int unreadTotal = HubState.totalUnread(this);
         statsText.setText("Profiles: " + profiles.size()
                 + "     Opened: " + opened
-                + "     Not signed in: " + (profiles.size() - opened));
+                + "     Not signed in: " + (profiles.size() - opened)
+                + (unreadTotal > 0 ? "     Unread: " + unreadTotal : ""));
+        refreshSettings();
 
         listBox.removeAllViews();
         if (profiles.isEmpty()) {
@@ -397,6 +559,34 @@ public class MainActivity extends Activity {
         chlp.topMargin = dp(6);
         chip.setLayoutParams(chlp);
         ident.addView(chip);
+
+        // Live chips (1.5.0): in a call, and unread waiting. Both read
+        // the shared state the profile processes write.
+        LinearLayout liveChips = new LinearLayout(this);
+        liveChips.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams lclp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lclp.topMargin = dp(6);
+        liveChips.setLayoutParams(lclp);
+        boolean inCall = p.id.equals(CallMode.freshOwner(this));
+        int unread = HubState.unread(this, p.slot);
+        if (inCall) {
+            TextView c = tv("In a call", 11.5f, GREEN, Typeface.create("sans-serif", Typeface.BOLD));
+            c.setBackground(round(GREEN_BG, 99, 0));
+            c.setPadding(dp(10), dp(3), dp(10), dp(3));
+            liveChips.addView(c);
+        }
+        if (unread > 0) {
+            TextView c = tv(unread + " unread", 11.5f, YELLOW, Typeface.create("sans-serif", Typeface.BOLD));
+            c.setBackground(round(YELLOW_BG, 99, 0));
+            c.setPadding(dp(10), dp(3), dp(10), dp(3));
+            LinearLayout.LayoutParams clp2 = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            if (inCall) clp2.leftMargin = dp(6);
+            c.setLayoutParams(clp2);
+            liveChips.addView(c);
+        }
+        if (inCall || unread > 0) ident.addView(liveChips);
         row.addView(ident);
 
         LinearLayout actions = new LinearLayout(this);
@@ -601,7 +791,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         // center the brand row inside wrap
         ((LinearLayout.LayoutParams) brand.getLayoutParams()).gravity = Gravity.CENTER_HORIZONTAL;
-        TextView word = tv("Osvyn", 44, INK, Fonts.bold(this));
+        TextView word = tv("Osvyn", 44, 0xFF101014, Fonts.bold(this));
         word.setLetterSpacing(-0.02f);
         brand.addView(word);
         TextView dot = new TextView(this);
@@ -681,6 +871,417 @@ public class MainActivity extends Activity {
 
         content.addView(overlay, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    // ---------- Settings (1.5.0) ----------
+
+    private LinearLayout settingRow(String title, String descText, TextView[] descHolder,
+                                    Button[] btnHolder, String btnText, View.OnClickListener onBtn,
+                                    Button[] btn2Holder, String btn2Text, View.OnClickListener onBtn2) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setBackground(round(PANEL, 14, GARIS));
+        row.setPadding(dp(16), dp(12), dp(14), dp(12));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(10);
+        row.setLayoutParams(lp);
+
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        texts.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        texts.addView(tv(title, 14, INK, Typeface.create("sans-serif", Typeface.BOLD)));
+        TextView desc = tv(descText, 12, INK3, null);
+        desc.setLineSpacing(0, 1.3f);
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dlp.topMargin = dp(2);
+        desc.setLayoutParams(dlp);
+        texts.addView(desc);
+        if (descHolder != null) descHolder[0] = desc;
+        row.addView(texts);
+
+        Button b = smallButton(btnText, GRAY_BG, INK2, GARIS);
+        b.setOnClickListener(v -> {
+            Ui.haptic(v);
+            onBtn.onClick(v);
+        });
+        if (btnHolder != null) btnHolder[0] = b;
+        row.addView(b);
+
+        if (btn2Holder != null && onBtn2 != null) {
+            Button b2 = smallButton(btn2Text, GRAY_BG, INK2, GARIS);
+            LinearLayout.LayoutParams b2lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            b2lp.leftMargin = dp(7);
+            b2.setLayoutParams(b2lp);
+            b2.setOnClickListener(v -> {
+                Ui.haptic(v);
+                onBtn2.onClick(v);
+            });
+            btn2Holder[0] = b2;
+            row.addView(b2);
+        }
+        return row;
+    }
+
+    private void refreshSettings() {
+        if (freezeBtn != null) {
+            boolean on = HubState.manualFreeze(this);
+            freezeBtn.setText(on ? "Release" : "Freeze");
+            freezeDesc.setText(on
+                    ? "Other profiles are frozen right now. Tap Release to wake them."
+                    : "Freeze every other profile at once, as if a call was on. Their notifications pause until released.");
+        }
+        if (quietBtn != null) {
+            boolean on = HubState.quietEnabled(this);
+            quietBtn.setText(on ? "On" : "Off");
+            quietDesc.setText(on
+                    ? "On, " + HubState.fmtMin(HubState.quietStartMin(this)) + " to "
+                            + HubState.fmtMin(HubState.quietEndMin(this))
+                            + ". Messages still arrive, but silently, inside the window."
+                    : "Off. Messages ring at all hours.");
+        }
+        if (ecoBtn != null) {
+            boolean on = HubState.eco(this);
+            ecoBtn.setText(on ? "On" : "Off");
+            ecoDesc.setText(on
+                    ? "On. Background scans run every 60 s; a notification can lag a little."
+                    : "Off. Background scans run every 15 s.");
+        }
+        if (lockBtn != null) {
+            boolean has = HubState.hasPin(this);
+            boolean on = HubState.lockEnabled(this);
+            lockBtn.setText(on ? "On" : "Off");
+            lockPinBtn.setText(has ? "PIN" : "Set PIN");
+            lockDesc.setText(!has
+                    ? "No PIN set yet. Set one to protect every signed-in account in here."
+                    : on ? "On. A PIN, or your fingerprint, is required to open Osvyn."
+                    : "A PIN is set, but the lock is off.");
+        }
+        if (updateBanner != null) {
+            String latest = HubState.latestVersion(this);
+            boolean newer = !latest.isEmpty()
+                    && HubState.compareVersions(latest, installedVersion()) > 0;
+            updateBanner.setVisibility(newer ? View.VISIBLE : View.GONE);
+            if (newer) {
+                updateBanner.setText("Update available: Osvyn Mobile " + latest
+                        + " - tap to get it in the bot");
+            }
+        }
+    }
+
+    private String installedVersion() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception e) {
+            return "0";
+        }
+    }
+
+    private void toggleFreeze() {
+        boolean next = !HubState.manualFreeze(this);
+        HubState.setBool(this, "freeze.manual", next);
+        CallMode.setActive(this, "hub-manual", next);
+        refresh();
+    }
+
+    private void toggleQuiet() {
+        HubState.setBool(this, "quiet.enabled", !HubState.quietEnabled(this));
+        refresh();
+    }
+
+    private void showQuietDialog() {
+        EditText input = new EditText(this);
+        input.setText(HubState.fmtMin(HubState.quietStartMin(this)) + "-"
+                + HubState.fmtMin(HubState.quietEndMin(this)));
+        input.setHint("22:00-07:00");
+        panelDialog("Quiet hours", "Write the window as start-end, for example 22:00-07:00.",
+                input, "Save", false, () -> {
+                    String[] parts = input.getText().toString().trim().split("-");
+                    Integer start = parts.length == 2 ? parseHm(parts[0]) : null;
+                    Integer end = parts.length == 2 ? parseHm(parts[1]) : null;
+                    if (start == null || end == null) {
+                        Toast.makeText(this, "Time format not recognized", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    HubState.setQuietWindow(this, start, end);
+                    HubState.setBool(this, "quiet.enabled", true);
+                    refresh();
+                }).show();
+    }
+
+    private Integer parseHm(String s) {
+        try {
+            String[] hm = s.trim().split(":");
+            int h = Integer.parseInt(hm[0].trim());
+            int m = hm.length > 1 ? Integer.parseInt(hm[1].trim()) : 0;
+            if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+            return h * 60 + m;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void toggleEco() {
+        HubState.setBool(this, "eco.enabled", !HubState.eco(this));
+        refresh();
+    }
+
+    private void toggleLock() {
+        if (!HubState.hasPin(this)) {
+            Toast.makeText(this, "Set a PIN first", Toast.LENGTH_LONG).show();
+            showPinDialog();
+            return;
+        }
+        HubState.setBool(this, "lock.enabled", !HubState.lockEnabled(this));
+        refresh();
+    }
+
+    private void showPinDialog() {
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        input.setHint("4 to 6 digits");
+        panelDialog("App lock PIN", "This PIN opens Osvyn. Your fingerprint works too, when the phone has one enrolled.",
+                input, "Save", false, () -> {
+                    String pin = input.getText().toString().trim();
+                    if (!pin.matches("\\d{4,6}")) {
+                        Toast.makeText(this, "PIN must be 4 to 6 digits", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    HubState.setPin(this, pin);
+                    Toast.makeText(this, "PIN saved, lock on", Toast.LENGTH_SHORT).show();
+                    refresh();
+                }).show();
+    }
+
+    // ---------- Downloads history (1.5.0) ----------
+
+    private void showDownloads() {
+        org.json.JSONArray arr = HubState.loadDownloads(this);
+        android.app.Dialog dlg = new android.app.Dialog(this);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(round(PANEL, 16, 0));
+        card.setPadding(dp(24), dp(22), dp(24), dp(20));
+        card.addView(tv("Downloads", 18, INK, Fonts.bold(this)));
+
+        if (arr.length() == 0) {
+            TextView m = tv("Nothing has been downloaded through the app yet.", 13.5f, INK2, null);
+            LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            mlp.topMargin = dp(8);
+            m.setLayoutParams(mlp);
+            card.addView(m);
+        } else {
+            ScrollView sv = new ScrollView(this);
+            LinearLayout list = new LinearLayout(this);
+            list.setOrientation(LinearLayout.VERTICAL);
+            sv.addView(list);
+            LinearLayout.LayoutParams svlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(320));
+            svlp.topMargin = dp(10);
+            sv.setLayoutParams(svlp);
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                String name = o.optString("name", "file");
+                long size = o.optLong("size", 0);
+                long at = o.optLong("at", 0);
+                String prof = o.optString("profile", "");
+                LinearLayout r = new LinearLayout(this);
+                r.setOrientation(LinearLayout.VERTICAL);
+                r.setPadding(0, dp(8), 0, dp(8));
+                TextView n = tv(name, 13.5f, INK, Typeface.create("sans-serif", Typeface.BOLD));
+                n.setMaxLines(1);
+                r.addView(n);
+                String meta = (size >= 1024 ? (size / 1024) + " KB" : size + " B")
+                        + (at > 0 ? " - " + relative(at) : "")
+                        + (prof.isEmpty() ? "" : " - " + prof);
+                r.addView(tv(meta, 11.5f, INK3, null));
+                r.setOnClickListener(v -> {
+                    dlg.dismiss();
+                    openDownload(name);
+                });
+                list.addView(r);
+            }
+            card.addView(sv);
+        }
+
+        Button close = smallButton("Close", PANEL, INK2, GARIS);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = dp(16);
+        clp.gravity = Gravity.RIGHT;
+        close.setLayoutParams(clp);
+        close.setOnClickListener(v -> dlg.dismiss());
+        card.addView(close);
+
+        dlg.setContentView(card);
+        if (dlg.getWindow() != null) {
+            dlg.getWindow().setBackgroundDrawable(
+                    new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+            int w = (int) (getResources().getDisplayMetrics().widthPixels * 0.88f);
+            dlg.getWindow().setLayout(w, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        dlg.show();
+    }
+
+    private void openDownload(String name) {
+        try {
+            Uri uri = null;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try (Cursor c = getContentResolver().query(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        new String[]{MediaStore.Downloads._ID},
+                        MediaStore.Downloads.DISPLAY_NAME + "=?",
+                        new String[]{name}, null)) {
+                    if (c != null && c.moveToFirst()) {
+                        uri = ContentUris.withAppendedId(
+                                MediaStore.Downloads.EXTERNAL_CONTENT_URI, c.getLong(0));
+                    }
+                }
+            }
+            if (uri == null) {
+                File dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                File f = dir == null ? null : new File(dir, name);
+                if (f != null && f.exists()) uri = Uri.fromFile(f);
+            }
+            if (uri == null) {
+                Toast.makeText(this, "File not found in Downloads", Toast.LENGTH_LONG).show();
+                return;
+            }
+            String ext = "";
+            int dot = name.lastIndexOf('.');
+            if (dot >= 0) ext = name.substring(dot + 1).toLowerCase();
+            String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(uri, mime == null ? "*/*" : mime);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Exception e) {
+            Toast.makeText(this, "Could not open the file", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    // ---------- Profiles backup (1.5.0) ----------
+
+    private void startExport() {
+        try {
+            Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("application/json");
+            i.putExtra(Intent.EXTRA_TITLE, "osvyn-profiles.json");
+            startActivityForResult(i, REQ_EXPORT);
+        } catch (Exception e) {
+            Toast.makeText(this, "Export is not available on this phone", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void startImport() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("application/json");
+            startActivityForResult(i, REQ_IMPORT);
+        } catch (Exception e) {
+            Toast.makeText(this, "Import is not available on this phone", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        Uri uri = data.getData();
+        if (requestCode == REQ_EXPORT) {
+            try {
+                org.json.JSONArray arr = new org.json.JSONArray();
+                for (ProfileStore.Profile p : profiles) {
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    o.put("name", p.name);
+                    o.put("color", p.color);
+                    arr.put(o);
+                }
+                try (java.io.OutputStream out = getContentResolver().openOutputStream(uri)) {
+                    out.write(arr.toString(2).getBytes(StandardCharsets.UTF_8));
+                }
+                Toast.makeText(this, "Exported " + profiles.size() + " profiles", Toast.LENGTH_LONG).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "Export failed", Toast.LENGTH_LONG).show();
+            }
+        } else if (requestCode == REQ_IMPORT) {
+            try {
+                String text;
+                try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                    byte[] chunk = new byte[4096];
+                    int n;
+                    while ((n = in.read(chunk)) != -1) bos.write(chunk, 0, n);
+                    text = new String(bos.toByteArray(), StandardCharsets.UTF_8);
+                }
+                org.json.JSONArray arr = new org.json.JSONArray(text);
+                List<ProfileStore.Profile> all = ProfileStore.load(this);
+                java.util.Set<String> names = new java.util.HashSet<>();
+                for (ProfileStore.Profile p : all) names.add(p.name);
+                int added = 0;
+                for (int i = 0; i < arr.length(); i++) {
+                    if (all.size() >= ProfileStore.MAX_PROFILES) break;
+                    org.json.JSONObject o = arr.optJSONObject(i);
+                    if (o == null) continue;
+                    String name = o.optString("name", "").trim();
+                    if (name.isEmpty() || names.contains(name)) continue;
+                    int slot = ProfileStore.freeSlot(all);
+                    if (slot < 0) break;
+                    all.add(new ProfileStore.Profile(
+                            "profil-" + System.currentTimeMillis() + "-" + slot,
+                            name, slot, o.optInt("color", slot - 1)));
+                    names.add(name);
+                    added++;
+                }
+                if (added > 0) ProfileStore.save(this, all);
+                refresh();
+                Toast.makeText(this, added > 0
+                        ? "Imported " + added + " profiles. Sign in inside each one."
+                        : "Nothing new to import", Toast.LENGTH_LONG).show();
+            } catch (Exception e) {
+                Toast.makeText(this, "Import failed: not a profiles file", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    // ---------- Update check (1.5.0) ----------
+
+    /** At most once per 6 hours, read the public repo README (it
+     *  carries the current version) and remember the newest version
+     *  seen. The banner in refreshSettings() does the comparing. */
+    private void maybeCheckUpdate() {
+        if (System.currentTimeMillis() - HubState.updateCheckedAt(this) < 6 * 3600_000L) return;
+        new Thread(() -> {
+            try {
+                java.net.URL u = new java.net.URL(
+                        "https://raw.githubusercontent.com/Whydiriki700/osvyn-mobile/main/README.md");
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection) u.openConnection();
+                c.setConnectTimeout(8000);
+                c.setReadTimeout(8000);
+                StringBuilder sb = new StringBuilder();
+                try (java.io.BufferedReader r = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = r.readLine()) != null && sb.length() < 20000) {
+                        sb.append(line).append('\n');
+                    }
+                }
+                java.util.regex.Matcher m = java.util.regex.Pattern
+                        .compile("Version (\\d+\\.\\d+\\.\\d+)").matcher(sb.toString());
+                if (m.find()) {
+                    HubState.setLatestVersion(this, m.group(1), System.currentTimeMillis());
+                    runOnUiThread(this::refreshSettings);
+                }
+            } catch (Exception ignored) {
+            }
+        }).start();
     }
 
     private void confirmDelete(ProfileStore.Profile p) {

@@ -51,24 +51,32 @@ final class CallMode {
 
     /** True when a fresh marker exists and belongs to another profile. */
     static boolean freshOwnedByOther(Context ctx, String myProfileId) {
+        String owner = freshOwner(ctx);
+        return !owner.isEmpty() && !owner.equals(myProfileId);
+    }
+
+    /** Owner of the call marker when it is fresh, "" otherwise. The
+     *  Hub reads this to badge the profile that is in a call (1.5.0);
+     *  the manual freeze switch uses the reserved owner "hub-manual". */
+    static String freshOwner(Context ctx) {
         try {
             File f = new File(ctx.getFilesDir(), FILE_NAME);
-            if (!f.exists()) return false;
+            if (!f.exists()) return "";
             String body;
             try (FileInputStream in = new FileInputStream(f)) {
                 byte[] buf = new byte[(int) Math.min(f.length(), 256)];
                 int n = in.read(buf);
-                if (n <= 0) return false;
+                if (n <= 0) return "";
                 body = new String(buf, 0, n, StandardCharsets.UTF_8);
             }
             String[] parts = body.split("\n");
-            if (parts.length < 2) return false;
+            if (parts.length < 2) return "";
             String owner = parts[0].trim();
             long ts = Long.parseLong(parts[1].trim());
-            if (owner.isEmpty() || owner.equals(myProfileId)) return false;
-            return System.currentTimeMillis() - ts < FRESH_MS;
+            if (owner.isEmpty()) return "";
+            return System.currentTimeMillis() - ts < FRESH_MS ? owner : "";
         } catch (Exception e) {
-            return false;
+            return "";
         }
     }
 
