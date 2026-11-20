@@ -66,10 +66,16 @@ public final class ProfileStore {
         File f = file(ctx);
         if (!f.exists()) return out;
         try {
-            byte[] buf = new byte[(int) f.length()];
+            byte[] buf;
             try (FileInputStream in = new FileInputStream(f)) {
-                int read = in.read(buf);
-                if (read <= 0) return out;
+                // Read to EOF: a single read() is not guaranteed to
+                // return the whole file.
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                byte[] chunk = new byte[4096];
+                int n;
+                while ((n = in.read(chunk)) != -1) bos.write(chunk, 0, n);
+                buf = bos.toByteArray();
+                if (buf.length == 0) return out;
             }
             JSONArray arr = new JSONArray(new String(buf, StandardCharsets.UTF_8));
             for (int i = 0; i < arr.length(); i++) {
@@ -99,8 +105,24 @@ public final class ProfileStore {
                 o.put("opened", p.opened);
                 arr.put(o);
             }
-            try (FileOutputStream out = new FileOutputStream(file(ctx))) {
+            // Atomic replace (1.4.3): write a temp file, then rename.
+            // Writing profiles.json in place meant a kill mid-save left
+            // a truncated file and the Hub came back with profiles
+            // missing; a rename is atomic, so readers see the old list
+            // or the new list, never half of one.
+            File tmp = new File(ctx.getFilesDir(), "profiles.json.tmp");
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
                 out.write(arr.toString().getBytes(StandardCharsets.UTF_8));
+                out.flush();
+            }
+            File target = file(ctx);
+            if (!tmp.renameTo(target)) {
+                // Same-directory rename should not fail; fall back to a
+                // direct write rather than losing the save entirely.
+                try (FileOutputStream out = new FileOutputStream(target)) {
+                    out.write(arr.toString().getBytes(StandardCharsets.UTF_8));
+                }
+                tmp.delete();
             }
         } catch (Exception ignored) {
         }

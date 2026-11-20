@@ -1,12 +1,16 @@
 package id.riki.osvyn.mobile;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.media.AudioDeviceInfo;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -21,6 +25,7 @@ import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
+import android.webkit.PermissionRequest;
 import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -40,6 +45,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -65,6 +71,7 @@ public abstract class BaseProfileActivity extends Activity {
 
     private static final long DEEP_SLEEP_MS = 180_000L;
     private static final int FILE_CHOOSER_REQUEST = 1001;
+    private static final int MEDIA_PERMISSION_REQUEST = 1002;
 
     protected abstract int mySlot();
 
@@ -75,6 +82,7 @@ public abstract class BaseProfileActivity extends Activity {
     private ProgressBar progress;
     private boolean slept = false;
     private ValueCallback<Uri[]> fileCallback;
+    private PermissionRequest pendingMediaRequest;
     private volatile boolean inForeground = false;
     private String myProfileId = "";
     private String myProfileName = "";
@@ -97,6 +105,33 @@ public abstract class BaseProfileActivity extends Activity {
     // impossible. The runnable now only marks the profile as slept;
     // the Hub card text describes this state.
     private final Runnable sleepRunnable = () -> slept = true;
+
+    // Call Mode (1.4.4): while ANOTHER profile is in a call, a
+    // backgrounded profile freezes for real (page paused, watcher
+    // disconnected) so the call gets the whole phone. The accepted
+    // trade-off, approved by Riki: this profile's message
+    // notifications pause for the length of the call and resume when
+    // it ends. The check runs only while backgrounded, every 3 s,
+    // against the shared call marker (CallMode); a stale marker
+    // (caller died mid-call) unfreezes automatically.
+    private boolean callFrozen = false;
+    private final Runnable callCheckRunnable = new Runnable() {
+        @Override public void run() {
+            if (inForeground || webView == null) return;
+            boolean otherInCall = CallMode.freshOwnedByOther(
+                    BaseProfileActivity.this, myProfileId);
+            if (otherInCall && !callFrozen) {
+                callFrozen = true;
+                webView.onPause();
+                applyWatcherSuspend();
+            } else if (!otherInCall && callFrozen) {
+                callFrozen = false;
+                webView.onResume();
+                applyWatcherSuspend();
+            }
+            handler.postDelayed(this, 3000);
+        }
+    };
 
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
@@ -276,6 +311,7 @@ public abstract class BaseProfileActivity extends Activity {
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
         webView.addJavascriptInterface(new BlobBridge(), "OsvynBridge");
         webView.addJavascriptInterface(new NotifyBridge(), "OsvynNotify");
+        webView.addJavascriptInterface(new CallBridge(), "OsvynCall");
         WatchService.start(this);
 
         webView.setWebViewClient(new WebViewClient() {
@@ -294,6 +330,8 @@ public abstract class BaseProfileActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 progress.setVisibility(View.VISIBLE);
+                // A fresh page load ends any previous call context.
+                clearCallAudio();
             }
 
             @Override
@@ -303,6 +341,8 @@ public abstract class BaseProfileActivity extends Activity {
                 if (url != null && url.contains("muse.ai")) {
                     view.evaluateJavascript(BRIDGE_JS, null);
                     view.evaluateJavascript(WATCH_JS, null);
+                    view.evaluateJavascript(CALL_JS, null);
+                    applyWatcherSuspend();
                 }
             }
         });
@@ -312,6 +352,11 @@ public abstract class BaseProfileActivity extends Activity {
             public void onProgressChanged(WebView view, int p) {
                 progress.setProgress(p);
                 if (p >= 100) progress.setVisibility(View.GONE);
+            }
+
+            @Override
+            public void onPermissionRequest(PermissionRequest request) {
+                handleMediaPermission(request);
             }
 
             @Override
@@ -383,6 +428,11 @@ public abstract class BaseProfileActivity extends Activity {
                     @Override
                     public void onCloseWindow(WebView window) {
                         closePopup();
+                    }
+
+                    @Override
+                    public void onPermissionRequest(PermissionRequest request) {
+                        handleMediaPermission(request);
                     }
                 });
                 box.addView(popup, new LinearLayout.LayoutParams(
@@ -570,12 +620,135 @@ public abstract class BaseProfileActivity extends Activity {
         }
     }
 
+    /** Call state bridge: the page reports whether a call is live in
+     *  this profile; the marker lets every other profile freeze while
+     *  this one is in a call (Call Mode, 1.4.4). */
+    private class CallBridge {
+        @JavascriptInterface
+        public void onCallState(boolean active) {
+            CallMode.setActive(BaseProfileActivity.this, myProfileId, active);
+        }
+    }
+
+    /**
+     * Call detection for Call Mode (1.4.4). Wraps getUserMedia and
+     * counts live media tracks: while at least one track is live this
+     * profile is in a call, and the native side marks it so the other
+     * profiles can freeze. Track stop() does not fire 'ended' in
+     * Chrome, so the heartbeat recounts by readyState instead of
+     * trusting events alone.
+     */
+    static final String CALL_JS = """
+            (function () {
+              if (window.__osvynCallHook) return;
+              window.__osvynCallHook = true;
+              var tracks = [];
+              var reported = false;
+              var hb = null;
+              function liveCount() {
+                var n = 0;
+                for (var i = tracks.length - 1; i >= 0; i--) {
+                  if (tracks[i].readyState === 'live') n++;
+                  else tracks.splice(i, 1);
+                }
+                return n;
+              }
+              function push(active) {
+                try { window.OsvynCall && window.OsvynCall.onCallState(active); } catch (e) {}
+              }
+              function report() {
+                var active = liveCount() > 0;
+                if (active !== reported) { reported = active; push(active); }
+                if (active && !hb) hb = setInterval(tick, 5000);
+                if (!active && hb) { clearInterval(hb); hb = null; }
+              }
+              function tick() {
+                var active = liveCount() > 0;
+                reported = active;
+                push(active);
+                if (!active && hb) { clearInterval(hb); hb = null; }
+              }
+              function watch(stream) {
+                try {
+                  stream.getTracks().forEach(function (t) {
+                    if (tracks.indexOf(t) < 0) {
+                      tracks.push(t);
+                      t.addEventListener('ended', report);
+                    }
+                  });
+                } catch (e) {}
+                report();
+              }
+              try {
+                var md = navigator.mediaDevices;
+                if (md && typeof md.getUserMedia === 'function') {
+                  var orig = md.getUserMedia.bind(md);
+                  md.getUserMedia = function (constraints) {
+                    return orig(constraints).then(function (s) { watch(s); return s; });
+                  };
+                }
+              } catch (e) {}
+            })();
+            """;
+
     static final String WATCH_JS = """
             (function () {
               if (window.__osvynWatcher) return;
               window.__osvynWatcher = true;
               var lastSig = '';
+              var scheduled = false;
+              var suspended = false;
+              // Smoothness (1.4.1): scans are coalesced to at most one per
+              // 1.5 s. The old observer ran a full-document scan on EVERY
+              // DOM mutation, and Muse mutates constantly while a reply
+              // streams, so the watcher itself was a main-thread load
+              // fighting the page it watches.
+              // Call weight (1.4.3): while this profile is on screen the
+              // watcher is suspended entirely. Its notifications are
+              // suppressed in the foreground anyway (see NotifyBridge),
+              // so scanning during a call was pure cost: the call page
+              // mutates constantly (waveform, timers) and every scan
+              // fought the call's own rendering. The native side flips
+              // this flag on resume/pause; background watching, the only
+              // state where notifications matter, is unchanged.
+              // Stage 1 (1.4.4): suspension now disconnects the observers
+              // and clears the interval for real. In 1.4.3 the flag only
+              // made schedule()/scan() return early, so both observers
+              // stayed connected and their callbacks kept firing on every
+              // mutation of the call page for the whole call.
+              var obs = null;
+              var titleObs = null;
+              var timer = null;
+              function startWatching() {
+                if (obs) return;
+                try {
+                  obs = new MutationObserver(schedule);
+                  obs.observe(document.documentElement, {childList: true, subtree: true});
+                  var titleEl = document.querySelector('title');
+                  if (titleEl) {
+                    titleObs = new MutationObserver(schedule);
+                    titleObs.observe(titleEl, {childList: true, characterData: true});
+                  }
+                } catch (e) {}
+                timer = setInterval(scan, 15000);
+              }
+              function stopWatching() {
+                if (obs) { try { obs.disconnect(); } catch (e) {} obs = null; }
+                if (titleObs) { try { titleObs.disconnect(); } catch (e) {} titleObs = null; }
+                if (timer !== null) { clearInterval(timer); timer = null; }
+              }
+              window.__osvynSetWatcherSuspended = function (v) {
+                suspended = !!v;
+                if (suspended) stopWatching();
+                else { startWatching(); schedule(); }
+              };
+              function schedule() {
+                if (suspended || scheduled) return;
+                scheduled = true;
+                setTimeout(function () { scheduled = false; scan(); }, 1500);
+              }
               function scan() {
+                if (suspended) return;
                 try {
                   var count = 0;
                   var m = /^\\((\\d+)\\)/.exec(document.title || '');
@@ -598,11 +771,7 @@ public abstract class BaseProfileActivity extends Activity {
                   }
                 } catch (e) {}
               }
-              try {
-                var obs = new MutationObserver(function () { scan(); });
-                obs.observe(document.documentElement, {childList: true, subtree: true, attributes: true, characterData: true});
-              } catch (e) {}
-              setInterval(scan, 15000);
+              startWatching();
               setTimeout(scan, 3000);
             })();
             """;
@@ -714,6 +883,156 @@ public abstract class BaseProfileActivity extends Activity {
                 .start();
     }
 
+    /** Tell the in-page watcher whether this profile is on screen.
+     *  Suspended while visible (notifications are suppressed then
+     *  anyway), live while backgrounded. See WATCH_JS (1.4.3). */
+    private void applyWatcherSuspend() {
+        if (webView == null) return;
+        webView.evaluateJavascript(
+                "window.__osvynSetWatcherSuspended && window.__osvynSetWatcherSuspended("
+                        + ((inForeground || callFrozen) ? "true" : "false") + ")", null);
+    }
+
+    /**
+     * WebRTC media permissions: voice and video calls inside Muse.
+     * WebView refuses getUserMedia unless the app both holds the matching
+     * Android runtime permission and grants the request here. Before
+     * 1.4.0 neither existed, so the call screen only ever showed the
+     * site's "allow microphone access" notice. Flow: grant at once when
+     * the runtime permissions are already held; otherwise ask Android
+     * first and answer the page from onRequestPermissionsResult.
+     */
+    private void handleMediaPermission(PermissionRequest request) {
+        boolean wantAudio = false;
+        boolean wantVideo = false;
+        for (String r : request.getResources()) {
+            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) wantAudio = true;
+            if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r)) wantVideo = true;
+        }
+        if (!wantAudio && !wantVideo) {
+            request.deny();
+            return;
+        }
+        List<String> missing = new ArrayList<>();
+        if (wantAudio && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.RECORD_AUDIO);
+        }
+        if (wantVideo && checkSelfPermission(Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.CAMERA);
+        }
+        if (wantAudio && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                        != PackageManager.PERMISSION_GRANTED
+                && bluetoothCallDevicePresent()) {
+            // Asked only when a Bluetooth call device is actually
+            // connected, so the prompt stays contextual to the call.
+            missing.add(Manifest.permission.BLUETOOTH_CONNECT);
+        }
+        if (missing.isEmpty()) {
+            request.grant(request.getResources());
+            if (wantAudio) routeCallAudio();
+            return;
+        }
+        if (pendingMediaRequest != null) {
+            // One system prompt at a time. A request arriving while the
+            // prompt is up is denied; the page can ask again afterwards.
+            request.deny();
+            return;
+        }
+        pendingMediaRequest = request;
+        requestPermissions(missing.toArray(new String[0]), MEDIA_PERMISSION_REQUEST);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                           int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != MEDIA_PERMISSION_REQUEST || pendingMediaRequest == null) return;
+        PermissionRequest req = pendingMediaRequest;
+        pendingMediaRequest = null;
+        // Re-check the live permission state instead of trusting the
+        // result arrays: a permission already held before the prompt is
+        // not listed in them, and an interrupted prompt returns empty
+        // arrays.
+        boolean audioOk = checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED;
+        boolean videoOk = checkSelfPermission(Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED;
+        List<String> granted = new ArrayList<>();
+        for (String r : req.getResources()) {
+            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r) && audioOk) granted.add(r);
+            if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r) && videoOk) granted.add(r);
+        }
+        if (granted.isEmpty()) {
+            req.deny();
+        } else {
+            req.grant(granted.toArray(new String[0]));
+            if (audioOk) routeCallAudio();
+        }
+    }
+
+    /**
+     * Bluetooth call routing (1.4.2). WebView on its own never moves a
+     * call to a Bluetooth headset: the page gets the microphone, but the
+     * audio stays on the phone. When a call asks for the microphone and
+     * a Bluetooth call device is connected, the app selects it as the
+     * communication device (Android 12+ API; classic Bluetooth SCO
+     * start below that). Routing is cleared when the page reloads or
+     * the profile closes, which is where a call context ends.
+     */
+    private boolean bluetoothCallDevicePresent() {
+        try {
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return false;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                for (AudioDeviceInfo d : am.getAvailableCommunicationDevices()) {
+                    if (d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) return true;
+                }
+                return false;
+            }
+            return am.isBluetoothScoAvailableOffCall();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void routeCallAudio() {
+        try {
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                        != PackageManager.PERMISSION_GRANTED) return;
+                for (AudioDeviceInfo d : am.getAvailableCommunicationDevices()) {
+                    if (d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
+                        am.setCommunicationDevice(d);
+                        return;
+                    }
+                }
+            } else if (am.isBluetoothScoAvailableOffCall()) {
+                am.startBluetoothSco();
+                am.setBluetoothScoOn(true);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void clearCallAudio() {
+        try {
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am == null) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                am.clearCommunicationDevice();
+            } else {
+                am.setBluetoothScoOn(false);
+                am.stopBluetoothSco();
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -753,6 +1072,10 @@ public abstract class BaseProfileActivity extends Activity {
     protected void onResume() {
         super.onResume();
         inForeground = true;
+        // Foreground again: Call Mode no longer applies to this
+        // profile, and its freeze check stops.
+        handler.removeCallbacks(callCheckRunnable);
+        callFrozen = false;
         if (mySlotValue > 0) {
             // Reading the profile clears its message notification.
             Notify.cancelForSlot(this, mySlotValue);
@@ -763,6 +1086,7 @@ public abstract class BaseProfileActivity extends Activity {
                 webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, false);
             }
             webView.onResume();
+            applyWatcherSuspend();
         }
     }
 
@@ -770,6 +1094,7 @@ public abstract class BaseProfileActivity extends Activity {
     protected void onPause() {
         inForeground = false;
         if (webView != null) {
+            applyWatcherSuspend();
             // Deliberately NO webView.onPause() here: pausing the page
             // would pause its JavaScript and silence the message
             // watcher. Only the renderer is waived, so the page stays
@@ -780,12 +1105,19 @@ public abstract class BaseProfileActivity extends Activity {
                 webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, true);
             }
         }
+        // Backgrounded: watch for another profile's call (Call Mode).
+        handler.removeCallbacks(callCheckRunnable);
+        handler.postDelayed(callCheckRunnable, 3000);
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
         handler.removeCallbacks(sleepRunnable);
+        handler.removeCallbacks(callCheckRunnable);
+        // If this profile owned the call marker, its call is over.
+        CallMode.setActive(this, myProfileId, false);
+        clearCallAudio();
         closePopup();
         if (webView != null) {
             webView.destroy();

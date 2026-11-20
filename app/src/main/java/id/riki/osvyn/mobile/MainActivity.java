@@ -58,6 +58,10 @@ public class MainActivity extends Activity {
     private TextView statsText;
     private List<ProfileStore.Profile> profiles = new ArrayList<>();
     private boolean shiftShowing = false;
+    // Smoothness (1.4.1): profile rows animate in only on the first
+    // Hub render. Replaying the staggered entrance on every onResume
+    // made returning to the Hub feel slow; later refreshes are instant.
+    private boolean hubAnimated = false;
 
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
@@ -223,7 +227,7 @@ public class MainActivity extends Activity {
             root.addView(hint);
         }
 
-        TextView foot = tv("Osvyn Mobile 1.3.0 - max " + ProfileStore.MAX_PROFILES + " profiles", 11, INK3, null);
+        TextView foot = tv("Osvyn Mobile 1.4.4 - max " + ProfileStore.MAX_PROFILES + " profiles", 11, INK3, null);
         foot.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -317,12 +321,15 @@ public class MainActivity extends Activity {
         }
         for (int i = 0; i < profiles.size(); i++) {
             View row = profileRow(profiles.get(i));
-            row.setAlpha(0f);
-            row.setTranslationY(dp(8));
-            row.animate().alpha(1f).translationY(0f).setDuration(380)
-                    .setStartDelay(i * 60L).start();
+            if (!hubAnimated) {
+                row.setAlpha(0f);
+                row.setTranslationY(dp(8));
+                row.animate().alpha(1f).translationY(0f).setDuration(380)
+                        .setStartDelay(i * 60L).start();
+            }
             listBox.addView(row);
         }
+        hubAnimated = true;
     }
 
     private View profileRow(ProfileStore.Profile p) {
