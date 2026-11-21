@@ -1,3 +1,5 @@
+![osvyn-mobile](assets/preview.png)
+
 <p align="center">
   <img src="muse-logo.svg" width="120" alt="Muse logo">
 </p>
