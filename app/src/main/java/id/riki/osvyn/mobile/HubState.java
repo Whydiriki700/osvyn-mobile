@@ -213,6 +213,8 @@ public final class HubState {
 
     /** Dotted-version compare: >0 when a is newer than b. */
     static int compareVersions(String a, String b) {
+        if (a == null) a = "";
+        if (b == null) b = "";
         String[] pa = a.split("\\.");
         String[] pb = b.split("\\.");
         for (int i = 0; i < Math.max(pa.length, pb.length); i++) {

@@ -26,8 +26,8 @@ echo "[1/6] aapt2 compile + link"
     --java "$OUT/gen" \
     --min-sdk-version 28 \
     --target-sdk-version 34 \
-    --version-code 13 \
-    --version-name "1.5.0" \
+    --version-code 14 \
+    --version-name "1.6.0" \
     --auto-add-overlay
 
 echo "[2/6] javac"
@@ -62,10 +62,10 @@ if [ ! -f "$KEYSTORE" ]; then
 fi
 "$BT/apksigner" sign --ks "$KEYSTORE" --ks-pass pass:android \
     --key-pass pass:android --ks-key-alias androiddebugkey \
-    --out "$ROOT/OsvynMobile-1.5.0.apk" "$OUT/osvyn-aligned.apk"
+    --out "$ROOT/OsvynMobile-1.6.0.apk" "$OUT/osvyn-aligned.apk"
 
 EXPECTED_CERT="8f902c542d23860078e8b9f34219faef58c0d34e6276da8a4e7da03e96d53f73"
-ACTUAL_CERT=$("$JAVA_HOME/bin/keytool" -printcert -jarfile "$ROOT/OsvynMobile-1.5.0.apk" 2>/dev/null \
+ACTUAL_CERT=$("$JAVA_HOME/bin/keytool" -printcert -jarfile "$ROOT/OsvynMobile-1.6.0.apk" 2>/dev/null \
     | grep -i "SHA256:" | sed 's/^[^:]*SHA256://I' | tr -d ': \t' | tr 'A-F' 'a-f')
 if [ "$ACTUAL_CERT" != "$EXPECTED_CERT" ]; then
     echo "FATAL: signer certificate mismatch ($ACTUAL_CERT)." >&2
@@ -73,5 +73,5 @@ if [ "$ACTUAL_CERT" != "$EXPECTED_CERT" ]; then
     exit 1
 fi
 echo "signer certificate OK (in-place update guaranteed)"
-ls -lh "$ROOT/OsvynMobile-1.5.0.apk"
+ls -lh "$ROOT/OsvynMobile-1.6.0.apk"
 echo "BUILD_OK"

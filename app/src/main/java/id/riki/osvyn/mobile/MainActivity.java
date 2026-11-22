@@ -9,7 +9,9 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.webkit.MimeTypeMap;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -88,7 +90,7 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout listBox;
-    private TextView statsText;
+    private LinearLayout statsRow;
     private List<ProfileStore.Profile> profiles = new ArrayList<>();
     private boolean shiftShowing = false;
     // 1.5.0 Hub live state: settings controls + update banner + a 3 s
@@ -207,40 +209,44 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         hlp.topMargin = dp(20);
         head.setLayoutParams(hlp);
-        TextView h1 = tv("Hub", 24, INK, Fonts.bold(this));
+        TextView h1 = tv("Hub", 26, INK, Fonts.bold(this));
         h1.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         head.addView(h1);
         Button add = new Button(this);
         add.setText("+ New profile");
-        add.setTextSize(13);
-        add.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+        add.setTextSize(13.5f);
+        add.setTypeface(Fonts.semibold(this));
         add.setTextColor(Color.WHITE);
-        add.setBackground(Ui.press(BLUE, BLUE_DARK, dp(9), 0));
-        add.setPadding(dp(15), dp(9), dp(15), dp(9));
+        add.setBackground(Ui.press(BLUE, BLUE_DARK, dp(12), 0));
+        add.setPadding(dp(18), dp(12), dp(18), dp(12));
         add.setAllCaps(false);
         add.setOnClickListener(v -> {
             Ui.haptic(v);
-            v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(80)
-                    .withEndAction(() -> v.animate().scaleX(1f).scaleY(1f).setDuration(120).start()).start();
+            v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(90).setInterpolator(Ui.EASE)
+                    .withEndAction(() -> v.animate().scaleX(1f).scaleY(1f).setDuration(160).setInterpolator(Ui.EASE).start()).start();
             showAddDialog();
         });
         head.addView(add);
         root.addView(head);
 
         TextView sub = tv("All your Muse profiles in one place. Open, put to sleep, or manage them without switching tabs one by one.", 13.5f, INK3, null);
+        sub.setLineSpacing(0, 1.45f);
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         slp.topMargin = dp(4);
         sub.setLayoutParams(slp);
         root.addView(sub);
 
-        // Stats strip with hairlines, like the Hub
-        statsText = tv("", 13, INK2, null);
-        statsText.setPadding(0, dp(13), 0, dp(13));
+        // Stats strip with hairlines, like the Hub. Since 1.6.0 the
+        // strip is four stat blocks (big number over a small label,
+        // hairline dividers) instead of one run-on text line.
+        statsRow = new LinearLayout(this);
+        statsRow.setOrientation(LinearLayout.HORIZONTAL);
+        statsRow.setPadding(0, dp(13), 0, dp(13));
         LinearLayout.LayoutParams stlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         stlp.topMargin = dp(22);
-        statsText.setLayoutParams(stlp);
+        statsRow.setLayoutParams(stlp);
         View topLine = new View(this);
         topLine.setBackgroundColor(GARIS);
         topLine.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
@@ -248,7 +254,7 @@ public class MainActivity extends Activity {
         statsBox.setOrientation(LinearLayout.VERTICAL);
         statsBox.setLayoutParams(stlp);
         statsBox.addView(topLine);
-        statsBox.addView(statsText);
+        statsBox.addView(statsRow);
         View botLine = new View(this);
         botLine.setBackgroundColor(GARIS);
         botLine.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
@@ -327,9 +333,20 @@ public class MainActivity extends Activity {
         setSection.setLayoutParams(sslp);
         root.addView(setSection);
 
+        // 1.6.0: the settings rows live in ONE grouped card with
+        // hairline dividers, not six separate floating boxes.
+        LinearLayout settingsCard = new LinearLayout(this);
+        settingsCard.setOrientation(LinearLayout.VERTICAL);
+        settingsCard.setBackground(round(PANEL, 16, GARIS));
+        LinearLayout.LayoutParams sclp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        sclp.topMargin = dp(8);
+        settingsCard.setLayoutParams(sclp);
+        root.addView(settingsCard);
+
         TextView[] d1 = new TextView[1];
         Button[] b1 = new Button[1];
-        root.addView(settingRow("Freeze other profiles",
+        settingsCard.addView(settingRow("Freeze other profiles",
                 "Freeze every other profile at once, as if a call was on. Their notifications pause until released.",
                 d1, b1, "Freeze", v -> toggleFreeze(), null, null, null));
         freezeDesc = d1[0];
@@ -338,7 +355,7 @@ public class MainActivity extends Activity {
         TextView[] d2 = new TextView[1];
         Button[] b2 = new Button[1];
         Button[] b2b = new Button[1];
-        root.addView(settingRow("Quiet hours",
+        settingsCard.addView(settingRow("Quiet hours",
                 "Messages still arrive, but silently, inside the window.",
                 d2, b2, "Off", v -> toggleQuiet(), b2b, "Set", v -> showQuietDialog()));
         quietDesc = d2[0];
@@ -347,7 +364,7 @@ public class MainActivity extends Activity {
 
         TextView[] d3 = new TextView[1];
         Button[] b3 = new Button[1];
-        root.addView(settingRow("Eco mode",
+        settingsCard.addView(settingRow("Eco mode",
                 "Stretches background message scans from 15 s to 60 s. Easier on the battery.",
                 d3, b3, "Off", v -> toggleEco(), null, null, null));
         ecoDesc = d3[0];
@@ -356,7 +373,7 @@ public class MainActivity extends Activity {
         TextView[] d4 = new TextView[1];
         Button[] b4 = new Button[1];
         Button[] b4b = new Button[1];
-        root.addView(settingRow("App lock",
+        settingsCard.addView(settingRow("App lock",
                 "A PIN, or your fingerprint, is required to open Osvyn.",
                 d4, b4, "Off", v -> toggleLock(), b4b, "PIN", v -> showPinDialog()));
         lockDesc = d4[0];
@@ -365,18 +382,28 @@ public class MainActivity extends Activity {
 
         TextView[] d5 = new TextView[1];
         Button[] b5 = new Button[1];
-        root.addView(settingRow("Downloads",
+        settingsCard.addView(settingRow("Downloads",
                 "Files downloaded through the app, reopenable from here.",
                 d5, b5, "View", v -> showDownloads(), null, null, null));
 
         TextView[] d6 = new TextView[1];
         Button[] b6 = new Button[1];
         Button[] b6b = new Button[1];
-        root.addView(settingRow("Profiles backup",
+        settingsCard.addView(settingRow("Profiles backup",
                 "Export the profile list to a file, or import it on another phone. Sign-ins never travel; each profile signs in again there.",
                 d6, b6, "Export", v -> startExport(), b6b, "Import", v -> startImport()));
 
-        TextView foot = tv("Osvyn Mobile 1.5.0 - max " + ProfileStore.MAX_PROFILES + " profiles", 11, INK3, null);
+        for (int di = settingsCard.getChildCount() - 1; di >= 1; di--) {
+            View div = new View(this);
+            div.setBackgroundColor(GARIS);
+            LinearLayout.LayoutParams dvlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+            dvlp.leftMargin = dp(16);
+            div.setLayoutParams(dvlp);
+            settingsCard.addView(div, di);
+        }
+
+        TextView foot = tv("Osvyn Mobile 1.6.0 - max " + ProfileStore.MAX_PROFILES + " profiles", 11, INK3, null);
         foot.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -385,14 +412,14 @@ public class MainActivity extends Activity {
         root.addView(foot);
 
         // Hub entrance animation (hubMasuk)
-        root.setAlpha(0f);
-        root.setTranslationY(dp(14));
-        root.setScaleX(0.985f);
-        root.setScaleY(0.985f);
-        root.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
-                .setDuration(340)
-                .setInterpolator(new PathInterpolator(0.21f, 0.9f, 0.28f, 1f))
-                .start();
+        if (Ui.motionOk(this)) {
+            root.setAlpha(0f);
+            root.setTranslationY(dp(10));
+            root.animate().alpha(1f).translationY(0f)
+                    .setDuration(280)
+                    .setInterpolator(Ui.EASE)
+                    .start();
+        }
 
         setContentView(scroll);
 
@@ -445,15 +472,41 @@ public class MainActivity extends Activity {
         return (diff / 86_400_000) + " d ago";
     }
 
+    /** One stat block in the Hub stats strip (1.6.0). */
+    private void addStat(LinearLayout parent, String value, String label,
+                         boolean dividerBefore, boolean accent) {
+        if (dividerBefore) {
+            View line = new View(this);
+            line.setBackgroundColor(GARIS);
+            LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(dp(1), dp(34));
+            llp.rightMargin = dp(14);
+            line.setLayoutParams(llp);
+            parent.addView(line);
+        }
+        LinearLayout block = new LinearLayout(this);
+        block.setOrientation(LinearLayout.VERTICAL);
+        block.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        block.addView(tv(value, 20, accent ? BLUE : INK, Fonts.semibold(this)));
+        TextView l = tv(label, 10.5f, INK3, Typeface.create("sans-serif", Typeface.BOLD));
+        l.setLetterSpacing(0.06f);
+        LinearLayout.LayoutParams llp2 = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        llp2.topMargin = dp(2);
+        l.setLayoutParams(llp2);
+        block.addView(l);
+        parent.addView(block);
+    }
+
     private void refresh() {
         profiles = ProfileStore.load(this);
         int opened = 0;
         for (ProfileStore.Profile p : profiles) if (p.opened > 0) opened++;
         int unreadTotal = HubState.totalUnread(this);
-        statsText.setText("Profiles: " + profiles.size()
-                + "     Opened: " + opened
-                + "     Not signed in: " + (profiles.size() - opened)
-                + (unreadTotal > 0 ? "     Unread: " + unreadTotal : ""));
+        statsRow.removeAllViews();
+        addStat(statsRow, String.valueOf(profiles.size()), "PROFILES", false, false);
+        addStat(statsRow, String.valueOf(opened), "OPENED", true, false);
+        addStat(statsRow, String.valueOf(profiles.size() - opened), "NOT SIGNED", true, false);
+        addStat(statsRow, String.valueOf(unreadTotal), "UNREAD", true, unreadTotal > 0);
         refreshSettings();
 
         listBox.removeAllViews();
@@ -478,16 +531,34 @@ public class MainActivity extends Activity {
             dlp2.topMargin = dp(8);
             d.setLayoutParams(dlp2);
             box.addView(d);
+            Button first = new Button(this);
+            first.setText("Create your first profile");
+            first.setTextSize(14);
+            first.setTypeface(Fonts.semibold(this));
+            first.setTextColor(Color.WHITE);
+            first.setAllCaps(false);
+            first.setBackground(Ui.press(BLUE, BLUE_DARK, dp(12), 0));
+            first.setPadding(dp(20), dp(12), dp(20), dp(12));
+            LinearLayout.LayoutParams flp2 = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            flp2.topMargin = dp(16);
+            first.setLayoutParams(flp2);
+            first.setOnClickListener(v -> {
+                Ui.haptic(v);
+                showAddDialog();
+            });
+            box.addView(first);
             listBox.addView(box);
             return;
         }
         for (int i = 0; i < profiles.size(); i++) {
             View row = profileRow(profiles.get(i));
-            if (!hubAnimated) {
+            if (!hubAnimated && Ui.motionOk(this)) {
                 row.setAlpha(0f);
-                row.setTranslationY(dp(8));
-                row.animate().alpha(1f).translationY(0f).setDuration(380)
-                        .setStartDelay(i * 60L).start();
+                row.setTranslationY(dp(10));
+                row.animate().alpha(1f).translationY(0f).setDuration(260)
+                        .setInterpolator(Ui.EASE)
+                        .setStartDelay(i * 45L).start();
             }
             listBox.addView(row);
         }
@@ -497,146 +568,149 @@ public class MainActivity extends Activity {
     private View profileRow(ProfileStore.Profile p) {
         boolean deleting = p.id.startsWith("deleting:");
         boolean opened = p.opened > 0;
+        boolean inCall = p.id.equals(CallMode.freshOwner(this));
+        int unread = HubState.unread(this, p.slot);
 
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(round(PANEL, 14, GARIS));
-        row.setPadding(dp(16), dp(14), dp(14), dp(14));
+        // 1.6.0 card: identity block on top, hairline, text actions in
+        // a footer row. The old stacked Open/Delete pill column read
+        // like a stock admin table; the unread count now rides the
+        // avatar as a badge instead of a second chip row.
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(round(PANEL, 16, GARIS));
+        card.setPadding(dp(16), dp(14), dp(16), dp(10));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(12);
-        row.setLayoutParams(lp);
+        card.setLayoutParams(lp);
 
-        // Avatar with presence dot
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        card.addView(top);
+
         FrameLayout avatarBox = new FrameLayout(this);
-        avatarBox.setLayoutParams(new LinearLayout.LayoutParams(dp(42), dp(42)));
+        avatarBox.setLayoutParams(new LinearLayout.LayoutParams(dp(46), dp(46)));
         TextView avatar = new TextView(this);
         avatar.setText(p.name.trim().isEmpty() ? "?" : p.name.trim().substring(0, 1).toUpperCase());
         avatar.setTextColor(Color.WHITE);
-        avatar.setTextSize(15);
-        avatar.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+        avatar.setTextSize(16);
+        avatar.setTypeface(Fonts.semibold(this));
         avatar.setGravity(Gravity.CENTER);
         GradientDrawable ac = new GradientDrawable();
         ac.setShape(GradientDrawable.OVAL);
         ac.setColor(ProfileStore.AURA[(p.slot - 1) % ProfileStore.AURA.length]);
         avatar.setBackground(ac);
-        avatarBox.addView(avatar, new FrameLayout.LayoutParams(dp(42), dp(42)));
+        avatarBox.addView(avatar, new FrameLayout.LayoutParams(dp(46), dp(46)));
         View pdot = new View(this);
         GradientDrawable pd = new GradientDrawable();
         pd.setShape(GradientDrawable.OVAL);
         pd.setColor(opened ? GREEN : 0xFFC9CCD4);
-        pd.setStroke(dp(2), Color.WHITE);
+        pd.setStroke(dp(2), PANEL);
         pdot.setBackground(pd);
-        FrameLayout.LayoutParams pdlp = new FrameLayout.LayoutParams(dp(11), dp(11));
+        FrameLayout.LayoutParams pdlp = new FrameLayout.LayoutParams(dp(12), dp(12));
         pdlp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
         avatarBox.addView(pdot, pdlp);
-        row.addView(avatarBox);
+        if (unread > 0) {
+            TextView badge = new TextView(this);
+            badge.setText(String.valueOf(unread));
+            badge.setTextColor(Color.WHITE);
+            badge.setTextSize(10.5f);
+            badge.setTypeface(Fonts.bold(this));
+            badge.setGravity(Gravity.CENTER);
+            GradientDrawable bd = new GradientDrawable();
+            bd.setShape(GradientDrawable.OVAL);
+            bd.setColor(BLUE);
+            bd.setStroke(dp(2), PANEL);
+            badge.setBackground(bd);
+            FrameLayout.LayoutParams blp2 = new FrameLayout.LayoutParams(dp(19), dp(19));
+            blp2.gravity = Gravity.TOP | Gravity.RIGHT;
+            avatarBox.addView(badge, blp2);
+        }
+        top.addView(avatarBox);
 
         LinearLayout ident = new LinearLayout(this);
         ident.setOrientation(LinearLayout.VERTICAL);
-        ident.setPadding(dp(13), 0, dp(8), 0);
+        ident.setPadding(dp(13), 0, dp(4), 0);
         ident.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView name = tv(p.name, 14.5f, INK, Typeface.create("sans-serif", Typeface.BOLD));
+        TextView name = tv(p.name, 15, INK, Fonts.semibold(this));
         name.setMaxLines(1);
+        name.setEllipsize(TextUtils.TruncateAt.END);
         ident.addView(name);
         String meta = deleting ? "Deleting... reopen it once to finish the wipe"
-                : opened ? "Put to sleep by DeepSleep, last opened " + relative(p.opened)
-                : "Profile created, not signed in yet";
-        TextView metaTv = tv(meta, 12.5f, INK3, null);
+                : inCall ? "In a call now"
+                : opened ? "Asleep \u00b7 last opened " + relative(p.opened)
+                : "Not signed in yet";
+        TextView metaTv = tv(meta, 12.5f, inCall ? GREEN : INK3,
+                inCall ? Fonts.semibold(this) : null);
+        metaTv.setMaxLines(1);
+        metaTv.setEllipsize(TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        mlp.topMargin = dp(2);
+        mlp.topMargin = dp(3);
         metaTv.setLayoutParams(mlp);
         ident.addView(metaTv);
+        top.addView(ident);
 
-        TextView chip = tv(opened ? "Asleep" : "Not signed in", 11.5f,
-                opened ? INK2 : YELLOW, Typeface.create("sans-serif", Typeface.BOLD));
-        chip.setBackground(round(opened ? GRAY_BG : YELLOW_BG, 99, 0));
-        chip.setPadding(dp(10), dp(3), dp(10), dp(3));
-        LinearLayout.LayoutParams chlp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        chlp.topMargin = dp(6);
-        chip.setLayoutParams(chlp);
-        ident.addView(chip);
-
-        // Live chips (1.5.0): in a call, and unread waiting. Both read
-        // the shared state the profile processes write.
-        LinearLayout liveChips = new LinearLayout(this);
-        liveChips.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams lclp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lclp.topMargin = dp(6);
-        liveChips.setLayoutParams(lclp);
-        boolean inCall = p.id.equals(CallMode.freshOwner(this));
-        int unread = HubState.unread(this, p.slot);
-        if (inCall) {
-            TextView c = tv("In a call", 11.5f, GREEN, Typeface.create("sans-serif", Typeface.BOLD));
-            c.setBackground(round(GREEN_BG, 99, 0));
-            c.setPadding(dp(10), dp(3), dp(10), dp(3));
-            liveChips.addView(c);
-        }
-        if (unread > 0) {
-            TextView c = tv(unread + " unread", 11.5f, YELLOW, Typeface.create("sans-serif", Typeface.BOLD));
-            c.setBackground(round(YELLOW_BG, 99, 0));
-            c.setPadding(dp(10), dp(3), dp(10), dp(3));
-            LinearLayout.LayoutParams clp2 = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            if (inCall) clp2.leftMargin = dp(6);
-            c.setLayoutParams(clp2);
-            liveChips.addView(c);
-        }
-        if (inCall || unread > 0) ident.addView(liveChips);
-        row.addView(ident);
+        View line = new View(this);
+        line.setBackgroundColor(GARIS);
+        LinearLayout.LayoutParams linelp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+        linelp.topMargin = dp(12);
+        line.setLayoutParams(linelp);
+        card.addView(line);
 
         LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.VERTICAL);
-        actions.setGravity(Gravity.CENTER);
-        Button open = smallButton("Open", PANEL, INK2, GARIS);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        TextView open = tv("Open", 13.5f, BLUE_DARK, Fonts.semibold(this));
+        open.setBackground(Ui.press(Color.TRANSPARENT, darkTheme ? 0xFF22222A : 0xFFF1F1F4, dp(8), 0));
+        open.setPadding(dp(10), dp(9), dp(14), dp(9));
         open.setOnClickListener(v -> {
             Ui.haptic(v);
             openProfile(p);
         });
         actions.addView(open);
-        Button del = smallButton("Delete", RED_BG, RED, 0xFFEFC4C0);
-        LinearLayout.LayoutParams delLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        delLp.topMargin = dp(7);
-        del.setLayoutParams(delLp);
+        View spacer = new View(this);
+        spacer.setLayoutParams(new LinearLayout.LayoutParams(0, 1, 1f));
+        actions.addView(spacer);
+        TextView del = tv("Delete", 13.5f, RED, Fonts.semibold(this));
+        del.setBackground(Ui.press(Color.TRANSPARENT, RED_BG, dp(8), 0));
+        del.setPadding(dp(14), dp(9), dp(10), dp(9));
         del.setOnClickListener(v -> {
             Ui.haptic(v);
             confirmDelete(p);
         });
         actions.addView(del);
-        row.addView(actions);
+        card.addView(actions);
 
         // The whole card opens the profile, and it answers the touch
         // with a small press scale so it never feels dead.
-        row.setOnTouchListener((v, ev) -> {
+        card.setOnTouchListener((v, ev) -> {
             if (ev.getAction() == android.view.MotionEvent.ACTION_DOWN) {
-                v.animate().scaleX(0.985f).scaleY(0.985f).setDuration(90).start();
+                v.animate().scaleX(0.985f).scaleY(0.985f).setDuration(90).setInterpolator(Ui.EASE).start();
             } else if (ev.getAction() == android.view.MotionEvent.ACTION_UP
                     || ev.getAction() == android.view.MotionEvent.ACTION_CANCEL) {
-                v.animate().scaleX(1f).scaleY(1f).setDuration(120).start();
+                v.animate().scaleX(1f).scaleY(1f).setDuration(140).setInterpolator(Ui.EASE).start();
             }
             return false;
         });
-        row.setOnClickListener(v -> {
+        card.setOnClickListener(v -> {
             Ui.haptic(v);
             openProfile(p);
         });
-        return row;
+        return card;
     }
 
     private Button smallButton(String text, int bg, int fg, int stroke) {
         Button b = new Button(this);
         b.setText(text);
-        b.setTextSize(12.5f);
+        b.setTextSize(13);
         b.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
         b.setTextColor(fg);
         int pressedBg = bg == BLUE ? BLUE_DARK : bg == RED_BG ? 0xFFF9DAD6 : 0xFFEDEDF1;
         b.setBackground(Ui.press(bg, pressedBg, dp(9), stroke));
-        b.setPadding(dp(12), dp(6), dp(12), dp(6));
+        b.setPadding(dp(14), dp(10), dp(14), dp(10));
         b.setAllCaps(false);
         b.setMinHeight(0);
         b.setMinimumHeight(0);
@@ -694,6 +768,8 @@ public class MainActivity extends Activity {
             input.setTextSize(15);
             input.setSingleLine(true);
             input.setBackground(round(PANEL, 9, GARIS));
+            input.setOnFocusChangeListener((v, hasFocus) ->
+                    input.setBackground(round(PANEL, 9, hasFocus ? BLUE : GARIS)));
             input.setPadding(dp(14), dp(11), dp(14), dp(11));
             LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -728,6 +804,16 @@ public class MainActivity extends Activity {
         row.addView(ok);
         card.addView(row);
 
+        dlg.setOnShowListener(d -> {
+            if (Ui.motionOk(this)) {
+                card.setAlpha(0f);
+                card.setScaleX(0.96f);
+                card.setScaleY(0.96f);
+                card.setTranslationY(dp(8));
+                card.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
+                        .setDuration(220).setInterpolator(Ui.EASE).start();
+            }
+        });
         dlg.setContentView(card);
         if (dlg.getWindow() != null) {
             dlg.getWindow().setBackgroundDrawable(
@@ -831,13 +917,13 @@ public class MainActivity extends Activity {
         wrap.setScaleY(0.96f);
         wrap.setTranslationY(dp(8));
         wrap.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
-                .setStartDelay(100).setDuration(800)
-                .setInterpolator(new PathInterpolator(0.22f, 0.8f, 0.3f, 1f)).start();
+                .setStartDelay(60).setDuration(320)
+                .setInterpolator(Ui.EASE).start();
 
         ValueAnimator va = ValueAnimator.ofInt(0, (int) (dp(150) * 0.82f));
         va.setStartDelay(450);
-        va.setDuration(1200);
-        va.setInterpolator(new PathInterpolator(0.22f, 0.8f, 0.3f, 1f));
+        va.setDuration(950);
+        va.setInterpolator(Ui.EASE);
         va.addUpdateListener(a -> {
             FrameLayout.LayoutParams fl = (FrameLayout.LayoutParams) fill.getLayoutParams();
             fl.width = (int) a.getAnimatedValue();
@@ -861,7 +947,7 @@ public class MainActivity extends Activity {
             if (!shiftShowing) return;
             shiftShowing = false;
             h.removeCallbacks(tick[0]);
-            overlay.animate().alpha(0f).setDuration(300).withEndAction(() -> {
+            overlay.animate().alpha(0f).setDuration(240).setInterpolator(Ui.EASE).withEndAction(() -> {
                 content.removeView(overlay);
                 openProfile(p);
             }).start();
@@ -881,11 +967,9 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(round(PANEL, 14, GARIS));
-        row.setPadding(dp(16), dp(12), dp(14), dp(12));
+        row.setPadding(dp(16), dp(14), dp(16), dp(14));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(10);
         row.setLayoutParams(lp);
 
         LinearLayout texts = new LinearLayout(this);
@@ -1118,6 +1202,16 @@ public class MainActivity extends Activity {
         close.setOnClickListener(v -> dlg.dismiss());
         card.addView(close);
 
+        dlg.setOnShowListener(d -> {
+            if (Ui.motionOk(this)) {
+                card.setAlpha(0f);
+                card.setScaleX(0.96f);
+                card.setScaleY(0.96f);
+                card.setTranslationY(dp(8));
+                card.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
+                        .setDuration(220).setInterpolator(Ui.EASE).start();
+            }
+        });
         dlg.setContentView(card);
         if (dlg.getWindow() != null) {
             dlg.getWindow().setBackgroundDrawable(

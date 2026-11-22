@@ -69,22 +69,58 @@ public class SplashActivity extends Activity {
         dot.setBackground(circle);
         word.addView(dot);
 
+        LinearLayout colSplash = new LinearLayout(this);
+        colSplash.setOrientation(LinearLayout.VERTICAL);
+        colSplash.setGravity(Gravity.CENTER_HORIZONTAL);
         FrameLayout.LayoutParams wlp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         wlp.gravity = Gravity.CENTER;
-        root.addView(word, wlp);
+        root.addView(colSplash, wlp);
+        colSplash.addView(word);
+
+        // Loading line in the shift-splash language (1.6.0): a thin
+        // track under the wordmark that fills while the splash holds,
+        // so the opening screen is a designed surface, not a bare logo
+        // on white.
+        FrameLayout track = new FrameLayout(this);
+        android.graphics.drawable.GradientDrawable tg = new android.graphics.drawable.GradientDrawable();
+        tg.setColor(0xFFE8E8EE);
+        tg.setCornerRadius(dp(99));
+        track.setBackground(tg);
+        LinearLayout.LayoutParams trlp = new LinearLayout.LayoutParams(dp(120), dp(3));
+        trlp.topMargin = dp(26);
+        track.setLayoutParams(trlp);
+        View fill = new View(this);
+        android.graphics.drawable.GradientDrawable fg = new android.graphics.drawable.GradientDrawable();
+        fg.setColor(0xFF15B3DA);
+        fg.setCornerRadius(dp(99));
+        fill.setBackground(fg);
+        track.addView(fill, new FrameLayout.LayoutParams(0, FrameLayout.LayoutParams.MATCH_PARENT));
+        colSplash.addView(track);
+        android.animation.ValueAnimator va = android.animation.ValueAnimator.ofInt(0, (int) (dp(120) * 0.82f));
+        va.setStartDelay(200);
+        va.setDuration(900);
+        va.setInterpolator(new PathInterpolator(0.22f, 1f, 0.36f, 1f));
+        va.addUpdateListener(anim -> {
+            FrameLayout.LayoutParams fl = (FrameLayout.LayoutParams) fill.getLayoutParams();
+            fl.width = (int) anim.getAnimatedValue();
+            fill.setLayoutParams(fl);
+        });
+        va.start();
 
         // Entrance animation, matching desktop "masuk" keyframes.
-        word.setAlpha(0f);
-        word.setScaleX(0.96f);
-        word.setScaleY(0.96f);
-        word.setTranslationY(8 * getResources().getDisplayMetrics().density);
-        word.animate()
-                .alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
-                .setStartDelay(100)
-                .setDuration(800)
-                .setInterpolator(new PathInterpolator(0.22f, 0.8f, 0.3f, 1f))
-                .start();
+        if (Ui.motionOk(this)) {
+            colSplash.setAlpha(0f);
+            colSplash.setScaleX(0.97f);
+            colSplash.setScaleY(0.97f);
+            colSplash.setTranslationY(dp(8));
+            colSplash.animate()
+                    .alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
+                    .setStartDelay(60)
+                    .setDuration(320)
+                    .setInterpolator(new PathInterpolator(0.22f, 1f, 0.36f, 1f))
+                    .start();
+        }
 
         root.setOnClickListener(v -> proceed());
         setContentView(root);
@@ -150,7 +186,13 @@ public class SplashActivity extends Activity {
         pin.setTextSize(18);
         pin.setGravity(Gravity.CENTER);
         pin.setSingleLine(true);
-        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(180), ViewGroup.LayoutParams.WRAP_CONTENT);
+        android.graphics.drawable.GradientDrawable pinBg = new android.graphics.drawable.GradientDrawable();
+        pinBg.setColor(0xFFFFFFFF);
+        pinBg.setCornerRadius(dp(12));
+        pinBg.setStroke(dp(1), 0xFFE2E2E8);
+        pin.setBackground(pinBg);
+        pin.setPadding(dp(14), dp(12), dp(14), dp(12));
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(210), ViewGroup.LayoutParams.WRAP_CONTENT);
         plp.topMargin = dp(18);
         pin.setLayoutParams(plp);
         col.addView(pin);
@@ -171,9 +213,9 @@ public class SplashActivity extends Activity {
         open.setAllCaps(false);
         android.graphics.drawable.GradientDrawable obg = new android.graphics.drawable.GradientDrawable();
         obg.setColor(0xFF2B6FF2);
-        obg.setCornerRadius(dp(9));
+        obg.setCornerRadius(dp(12));
         open.setBackground(obg);
-        open.setPadding(dp(26), dp(10), dp(26), dp(10));
+        open.setPadding(dp(30), dp(13), dp(30), dp(13));
         LinearLayout.LayoutParams olp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         olp.topMargin = dp(14);
@@ -191,6 +233,12 @@ public class SplashActivity extends Activity {
 
         setContentView(root);
         pin.requestFocus();
+        if (Ui.motionOk(this)) {
+            col.setAlpha(0f);
+            col.setTranslationY(dp(10));
+            col.animate().alpha(1f).translationY(0f).setDuration(240)
+                    .setInterpolator(new PathInterpolator(0.22f, 1f, 0.36f, 1f)).start();
+        }
 
         // Fingerprint, when the hardware and an enrolled finger exist.
         try {

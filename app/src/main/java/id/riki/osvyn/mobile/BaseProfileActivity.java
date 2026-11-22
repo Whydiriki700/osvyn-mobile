@@ -79,7 +79,10 @@ public abstract class BaseProfileActivity extends Activity {
     private FrameLayout stage;
     private WebView popupView;
     private View popupBox;
-    private ProgressBar progress;
+    private FrameLayout progressTrack;
+    private View progressFill;
+    private android.animation.ValueAnimator progressAnim;
+    private float progressFraction = 0f;
     private boolean slept = false;
     private ValueCallback<Uri[]> fileCallback;
     private PermissionRequest pendingMediaRequest;
@@ -264,13 +267,17 @@ public abstract class BaseProfileActivity extends Activity {
         scroller.addView(bar);
         root.addView(scroller);
 
-        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        progress.setMax(100);
-        progress.setProgressTintList(android.content.res.ColorStateList.valueOf(0xFF15B3DA));
-        progress.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF26262E));
-        progress.setLayoutParams(new LinearLayout.LayoutParams(
+        // Loading line (1.6.0): a custom 3dp track + cyan fill whose
+        // width eases between progress values on the locked curve,
+        // instead of the stock ProgressBar's stepped jumps.
+        progressTrack = new FrameLayout(this);
+        progressTrack.setBackgroundColor(0xFF26262E);
+        progressTrack.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(3)));
-        root.addView(progress);
+        progressFill = new View(this);
+        progressFill.setBackgroundColor(0xFF15B3DA);
+        progressTrack.addView(progressFill, new FrameLayout.LayoutParams(0, FrameLayout.LayoutParams.MATCH_PARENT));
+        root.addView(progressTrack);
 
         stage = new FrameLayout(this);
         stage.setLayoutParams(new LinearLayout.LayoutParams(
@@ -329,14 +336,14 @@ public abstract class BaseProfileActivity extends Activity {
 
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                progress.setVisibility(View.VISIBLE);
+                showProgress(0);
                 // A fresh page load ends any previous call context.
                 clearCallAudio();
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                progress.setVisibility(View.GONE);
+                hideProgress();
                 CookieManager.getInstance().flush();
                 if (url != null && url.contains("muse.ai")) {
                     view.evaluateJavascript(BRIDGE_JS, null);
@@ -350,8 +357,7 @@ public abstract class BaseProfileActivity extends Activity {
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onProgressChanged(WebView view, int p) {
-                progress.setProgress(p);
-                if (p >= 100) progress.setVisibility(View.GONE);
+                setProgressSmooth(p);
             }
 
             @Override
@@ -538,6 +544,53 @@ public abstract class BaseProfileActivity extends Activity {
         lp.rightMargin = dp(8);
         t.setLayoutParams(lp);
         return t;
+    }
+
+    private void showProgress(int p) {
+        if (progressAnim != null) progressAnim.cancel();
+        progressFraction = 0f;
+        progressTrack.setVisibility(View.VISIBLE);
+        setFillFraction(0f);
+        if (p > 0) setProgressSmooth(p);
+    }
+
+    private void setProgressSmooth(int p) {
+        float target = p / 100f;
+        progressTrack.setVisibility(View.VISIBLE);
+        if (!Ui.motionOk(this)) {
+            progressFraction = target;
+            setFillFraction(target);
+            if (p >= 100) hideProgress();
+            return;
+        }
+        if (progressAnim != null) progressAnim.cancel();
+        final float from = progressFraction;
+        progressAnim = android.animation.ValueAnimator.ofFloat(from, target);
+        progressAnim.setDuration(240);
+        progressAnim.setInterpolator(Ui.EASE);
+        progressAnim.addUpdateListener(a -> {
+            progressFraction = (float) a.getAnimatedValue();
+            setFillFraction(progressFraction);
+        });
+        progressAnim.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(android.animation.Animator animation) {
+                if (progressFraction >= 0.999f) hideProgress();
+            }
+        });
+        progressAnim.start();
+    }
+
+    private void setFillFraction(float f) {
+        int w = progressTrack.getWidth();
+        if (w <= 0) return;
+        FrameLayout.LayoutParams fl = (FrameLayout.LayoutParams) progressFill.getLayoutParams();
+        fl.width = (int) (w * f);
+        progressFill.setLayoutParams(fl);
+    }
+
+    private void hideProgress() {
+        if (progressAnim != null) progressAnim.cancel();
+        progressTrack.setVisibility(View.GONE);
     }
 
     private void closePopup() {

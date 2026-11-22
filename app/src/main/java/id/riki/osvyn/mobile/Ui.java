@@ -1,9 +1,13 @@
 package id.riki.osvyn.mobile;
 
+import android.content.Context;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
+import android.provider.Settings;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
+import android.view.animation.Interpolator;
+import android.view.animation.PathInterpolator;
 
 /**
  * Shared touch feedback: pressed-state backgrounds and light haptics,
@@ -14,6 +18,24 @@ import android.view.View;
 public final class Ui {
 
     private Ui() {
+    }
+
+    /**
+     * The locked motion token for the whole app (Master's standing
+     * rule): ease-out cubic-bezier(0.22, 1, 0.36, 1), durations in the
+     * 120-320 ms band, no overshoot. Every animation added or changed
+     * in 1.6.0 uses this curve.
+     */
+    public static final Interpolator EASE = new PathInterpolator(0.22f, 1f, 0.36f, 1f);
+
+    /** True when the system animator duration scale allows motion. */
+    public static boolean motionOk(Context ctx) {
+        try {
+            return Settings.Global.getFloat(ctx.getContentResolver(),
+                    Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f;
+        } catch (Exception e) {
+            return true;
+        }
     }
 
     public static GradientDrawable round(int color, int radiusPx, int strokeColor) {
