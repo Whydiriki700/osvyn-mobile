@@ -1,6 +1,5 @@
 package id.riki.osvyn.mobile;
 
-import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ContentUris;
@@ -403,7 +402,7 @@ public class MainActivity extends Activity {
             settingsCard.addView(div, di);
         }
 
-        TextView foot = tv("Osvyn Mobile 1.6.0 - max " + ProfileStore.MAX_PROFILES + " profiles", 11, INK3, null);
+        TextView foot = tv("Osvyn Mobile 1.6.1 - max " + ProfileStore.MAX_PROFILES + " profiles", 11, INK3, null);
         foot.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -414,9 +413,9 @@ public class MainActivity extends Activity {
         // Hub entrance animation (hubMasuk)
         if (Ui.motionOk(this)) {
             root.setAlpha(0f);
-            root.setTranslationY(dp(10));
+            root.setTranslationY(dp(8));
             root.animate().alpha(1f).translationY(0f)
-                    .setDuration(280)
+                    .setDuration(220)
                     .setInterpolator(Ui.EASE)
                     .start();
         }
@@ -555,10 +554,10 @@ public class MainActivity extends Activity {
             View row = profileRow(profiles.get(i));
             if (!hubAnimated && Ui.motionOk(this)) {
                 row.setAlpha(0f);
-                row.setTranslationY(dp(10));
-                row.animate().alpha(1f).translationY(0f).setDuration(260)
+                row.setTranslationY(dp(6));
+                row.animate().alpha(1f).translationY(0f).setDuration(180)
                         .setInterpolator(Ui.EASE)
-                        .setStartDelay(i * 45L).start();
+                        .setStartDelay(Math.min(i * 35L, 140L)).start();
             }
             listBox.addView(row);
         }
@@ -706,7 +705,7 @@ public class MainActivity extends Activity {
         Button b = new Button(this);
         b.setText(text);
         b.setTextSize(13);
-        b.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
+        b.setTypeface(Fonts.semibold(this));
         b.setTextColor(fg);
         int pressedBg = bg == BLUE ? BLUE_DARK : bg == RED_BG ? 0xFFF9DAD6 : 0xFFEDEDF1;
         b.setBackground(Ui.press(bg, pressedBg, dp(9), stroke));
@@ -909,7 +908,8 @@ public class MainActivity extends Activity {
         track.setLayoutParams(trlp);
         View fill = new View(this);
         fill.setBackground(round(CYAN, 99, 0));
-        track.addView(fill, new FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT));
+        track.addView(fill, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         wrap.addView(track);
 
         wrap.setAlpha(0f);
@@ -920,16 +920,14 @@ public class MainActivity extends Activity {
                 .setStartDelay(60).setDuration(320)
                 .setInterpolator(Ui.EASE).start();
 
-        ValueAnimator va = ValueAnimator.ofInt(0, (int) (dp(150) * 0.82f));
-        va.setStartDelay(450);
-        va.setDuration(950);
-        va.setInterpolator(Ui.EASE);
-        va.addUpdateListener(a -> {
-            FrameLayout.LayoutParams fl = (FrameLayout.LayoutParams) fill.getLayoutParams();
-            fl.width = (int) a.getAnimatedValue();
-            fill.setLayoutParams(fl);
-        });
-        va.start();
+        fill.setPivotX(0f);
+        if (Ui.motionOk(this)) {
+            fill.setScaleX(0f);
+            fill.animate().scaleX(0.82f).setStartDelay(180).setDuration(900)
+                    .setInterpolator(Ui.EASE).start();
+        } else {
+            fill.setScaleX(0.82f);
+        }
 
         Handler h = new Handler(Looper.getMainLooper());
         String base = "Preparing new profile";
@@ -947,13 +945,13 @@ public class MainActivity extends Activity {
             if (!shiftShowing) return;
             shiftShowing = false;
             h.removeCallbacks(tick[0]);
-            overlay.animate().alpha(0f).setDuration(240).setInterpolator(Ui.EASE).withEndAction(() -> {
+            overlay.animate().alpha(0f).setDuration(200).setInterpolator(Ui.EASE).withEndAction(() -> {
                 content.removeView(overlay);
                 openProfile(p);
             }).start();
         };
         overlay.setOnClickListener(v -> finishShift.run());
-        h.postDelayed(finishShift, 1850);
+        h.postDelayed(finishShift, 1400);
 
         content.addView(overlay, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -1010,10 +1008,28 @@ public class MainActivity extends Activity {
         return row;
     }
 
+    private void styleToggle(Button b, boolean on, boolean danger) {
+        if (b == null) return;
+        if (!on) {
+            b.setTextColor(INK2);
+            b.setBackground(Ui.press(GRAY_BG, 0xFFEDEDF1, dp(9), GARIS));
+        } else if (danger) {
+            b.setTextColor(RED);
+            b.setBackground(Ui.press(RED_BG, darkTheme ? 0xFF4A2422 : 0xFFF9DAD6, dp(9),
+                    darkTheme ? 0xFF6E3532 : 0xFFEFC4C0));
+        } else {
+            b.setTextColor(BLUE);
+            b.setBackground(Ui.press(darkTheme ? 0xFF182848 : 0xFFEAF1FE,
+                    darkTheme ? 0xFF1E3A66 : 0xFFD7E5FD, dp(9),
+                    darkTheme ? 0xFF2A4A7F : 0xFFB8CFFA));
+        }
+    }
+
     private void refreshSettings() {
         if (freezeBtn != null) {
             boolean on = HubState.manualFreeze(this);
             freezeBtn.setText(on ? "Release" : "Freeze");
+            styleToggle(freezeBtn, on, true);
             freezeDesc.setText(on
                     ? "Other profiles are frozen right now. Tap Release to wake them."
                     : "Freeze every other profile at once, as if a call was on. Their notifications pause until released.");
@@ -1021,6 +1037,7 @@ public class MainActivity extends Activity {
         if (quietBtn != null) {
             boolean on = HubState.quietEnabled(this);
             quietBtn.setText(on ? "On" : "Off");
+            styleToggle(quietBtn, on, false);
             quietDesc.setText(on
                     ? "On, " + HubState.fmtMin(HubState.quietStartMin(this)) + " to "
                             + HubState.fmtMin(HubState.quietEndMin(this))
@@ -1030,6 +1047,7 @@ public class MainActivity extends Activity {
         if (ecoBtn != null) {
             boolean on = HubState.eco(this);
             ecoBtn.setText(on ? "On" : "Off");
+            styleToggle(ecoBtn, on, false);
             ecoDesc.setText(on
                     ? "On. Background scans run every 60 s; a notification can lag a little."
                     : "Off. Background scans run every 15 s.");
@@ -1038,6 +1056,7 @@ public class MainActivity extends Activity {
             boolean has = HubState.hasPin(this);
             boolean on = HubState.lockEnabled(this);
             lockBtn.setText(on ? "On" : "Off");
+            styleToggle(lockBtn, on, false);
             lockPinBtn.setText(has ? "PIN" : "Set PIN");
             lockDesc.setText(!has
                     ? "No PIN set yet. Set one to protect every signed-in account in here."
@@ -1189,7 +1208,18 @@ public class MainActivity extends Activity {
                     openDownload(name);
                 });
                 list.addView(r);
+                View dv = new View(this);
+                dv.setBackgroundColor(GARIS);
+                list.addView(dv, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
             }
+            list.post(() -> {
+                int h = list.getHeight();
+                if (h > 0 && h < dp(320)) {
+                    svlp.height = h;
+                    sv.setLayoutParams(svlp);
+                }
+            });
             card.addView(sv);
         }
 

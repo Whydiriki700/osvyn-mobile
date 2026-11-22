@@ -125,7 +125,7 @@ public class SplashActivity extends Activity {
         root.setOnClickListener(v -> proceed());
         setContentView(root);
 
-        handler.postDelayed(go, 1150);
+        handler.postDelayed(go, 750);
     }
 
     private void proceed() {
@@ -171,7 +171,7 @@ public class SplashActivity extends Activity {
         col.addView(title);
 
         TextView hint = new TextView(this);
-        hint.setText("Enter your PIN, or use your fingerprint.");
+        hint.setText("Enter your 4-6 digit PIN, or use your fingerprint.");
         hint.setTextSize(13);
         hint.setTextColor(0xFF83878F);
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(
@@ -186,6 +186,10 @@ public class SplashActivity extends Activity {
         pin.setTextSize(18);
         pin.setGravity(Gravity.CENTER);
         pin.setSingleLine(true);
+        pin.setLetterSpacing(0.25f);
+        pin.setFilters(new android.text.InputFilter[]{
+                new android.text.InputFilter.LengthFilter(6)});
+        pin.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
         android.graphics.drawable.GradientDrawable pinBg = new android.graphics.drawable.GradientDrawable();
         pinBg.setColor(0xFFFFFFFF);
         pinBg.setCornerRadius(dp(12));
