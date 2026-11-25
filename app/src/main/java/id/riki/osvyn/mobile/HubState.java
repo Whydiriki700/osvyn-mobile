@@ -182,6 +182,105 @@ public final class HubState {
         return !h.isEmpty() && h.equals(sha256Hex("osvyn-lock:" + pin));
     }
 
+    // ---------- lock session (1.7.0) ----------
+    // Before 1.7.0 the PIN was only asked on the Splash screen, so
+    // re-entering the app from recents or through an already running
+    // profile never asked again and the lock felt decorative. The
+    // session facts now live here, shared by every process: when the
+    // PIN last passed, when the app last went fully to the background,
+    // and when any activity last came to the foreground. LockGate
+    // combines them: a pass stays valid until the app has sat in the
+    // background for over a minute since that pass.
+
+    static long lockPassedAt(Context ctx) {
+        return getLong(ctx, "lock.passedAt", 0);
+    }
+
+    static void markLockPassed(Context ctx) {
+        set(ctx, "lock.passedAt", String.valueOf(System.currentTimeMillis()));
+    }
+
+    static long lockBackgroundAt(Context ctx) {
+        return getLong(ctx, "lock.bgAt", 0);
+    }
+
+    static void noteLockBackground(Context ctx) {
+        set(ctx, "lock.bgAt", String.valueOf(System.currentTimeMillis()));
+    }
+
+    static long lockForegroundAt(Context ctx) {
+        return getLong(ctx, "lock.fgAt", 0);
+    }
+
+    static void noteLockForeground(Context ctx) {
+        set(ctx, "lock.fgAt", String.valueOf(System.currentTimeMillis()));
+    }
+
+    // ---------- manual profile sleep (1.7.0) ----------
+    // The Hub writes a sleep request for a slot; the profile process,
+    // which only runs its checks while backgrounded, sees it within a
+    // few seconds and puts itself to sleep for real (page paused and
+    // the activity finished, so its WebView and renderer are gone).
+    // Opening the profile again clears the state.
+
+    static void requestSleep(Context ctx, int slot) {
+        Properties p = load(ctx);
+        p.setProperty("sleep.req." + slot, String.valueOf(System.currentTimeMillis()));
+        p.setProperty("sleep.on." + slot, "1");
+        save(ctx, p);
+    }
+
+    static long sleepRequestedAt(Context ctx, int slot) {
+        return getLong(ctx, "sleep.req." + slot, 0);
+    }
+
+    static boolean isSleeping(Context ctx, int slot) {
+        return getBool(ctx, "sleep.on." + slot);
+    }
+
+    static void consumeSleepRequest(Context ctx, int slot) {
+        set(ctx, "sleep.req." + slot, "0");
+    }
+
+    static void clearSleep(Context ctx, int slot) {
+        Properties p = load(ctx);
+        p.setProperty("sleep.req." + slot, "0");
+        p.setProperty("sleep.on." + slot, "0");
+        save(ctx, p);
+    }
+
+    // ---------- download folder (1.7.0) ----------
+    // Downloads used to be nailed to the Downloads folder. The stored
+    // value is a MediaStore relative path; BaseProfileActivity maps it
+    // to a DownloadManager destination for the native path.
+
+    static final String[] DL_FOLDER_VALUES = {
+            "Download", "Download/Osvyn", "Documents", "Pictures", "Movies", "Music"
+    };
+    static final String[] DL_FOLDER_LABELS = {
+            "Downloads", "Downloads / Osvyn", "Documents", "Pictures", "Movies", "Music"
+    };
+
+    static String dlFolder(Context ctx) {
+        String v = get(ctx, "dl.folder", "Download");
+        for (String known : DL_FOLDER_VALUES) {
+            if (known.equals(v)) return v;
+        }
+        return "Download";
+    }
+
+    static String dlFolderLabel(Context ctx) {
+        String v = dlFolder(ctx);
+        for (int i = 0; i < DL_FOLDER_VALUES.length; i++) {
+            if (DL_FOLDER_VALUES[i].equals(v)) return DL_FOLDER_LABELS[i];
+        }
+        return "Downloads";
+    }
+
+    static void setDlFolder(Context ctx, String value) {
+        set(ctx, "dl.folder", value);
+    }
+
     static String sha256Hex(String s) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");

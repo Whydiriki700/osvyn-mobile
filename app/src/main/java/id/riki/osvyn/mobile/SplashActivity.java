@@ -227,6 +227,11 @@ public class SplashActivity extends Activity {
         open.setOnClickListener(v -> {
             if (HubState.checkPin(this, pin.getText().toString().trim())) {
                 lockPassed = true;
+                // Record the pass in the shared lock session (1.7.0) so
+                // the in-app gates in the Hub and profiles agree this
+                // session is unlocked until the next long backgrounding.
+                HubState.markLockPassed(this);
+                HubState.noteLockForeground(this);
                 proceed();
             } else {
                 err.setText("Wrong PIN, try again.");
@@ -255,6 +260,8 @@ public class SplashActivity extends Activity {
                                 @Override public void onAuthenticationSucceeded(
                                         FingerprintManager.AuthenticationResult result) {
                                     lockPassed = true;
+                                    HubState.markLockPassed(SplashActivity.this);
+                                    HubState.noteLockForeground(SplashActivity.this);
                                     proceed();
                                 }
                                 @Override public void onAuthenticationFailed() {

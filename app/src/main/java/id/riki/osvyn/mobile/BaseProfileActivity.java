@@ -29,7 +29,9 @@ import android.webkit.PermissionRequest;
 import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebStorage;
 import android.webkit.WebView;
@@ -79,6 +81,8 @@ public abstract class BaseProfileActivity extends Activity {
     private FrameLayout stage;
     private WebView popupView;
     private View popupBox;
+    private View errorBox;
+    private String failedUrl;
     private FrameLayout progressTrack;
     private View progressFill;
     private android.animation.ValueAnimator progressAnim;
@@ -121,6 +125,23 @@ public abstract class BaseProfileActivity extends Activity {
     private final Runnable callCheckRunnable = new Runnable() {
         @Override public void run() {
             if (inForeground || webView == null) return;
+            // Manual sleep (1.7.0): the Hub asked this profile to rest.
+            // Honoured here, in the background-only check, and skipped
+            // while this profile owns a call. Sleeping is real: the
+            // page pauses and the activity finishes, so the WebView
+            // and its renderer are destroyed, not parked. The watcher
+            // for this profile stops hearing messages until it is
+            // opened again, which is the point of putting it to sleep.
+            if (mySlotValue > 0
+                    && HubState.sleepRequestedAt(BaseProfileActivity.this, mySlotValue) > 0
+                    && !myProfileId.equals(CallMode.freshOwner(BaseProfileActivity.this))) {
+                HubState.consumeSleepRequest(BaseProfileActivity.this, mySlotValue);
+                slept = true;
+                webView.onPause();
+                applyWatcherSuspend();
+                finish();
+                return;
+            }
             boolean otherInCall = CallMode.freshOwnedByOther(
                     BaseProfileActivity.this, myProfileId);
             if (otherInCall && !callFrozen) {
@@ -337,8 +358,33 @@ public abstract class BaseProfileActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 showProgress(0);
+                hidePageError();
                 // A fresh page load ends any previous call context.
                 clearCallAudio();
+            }
+
+            // Page error handling (1.7.0): before this, a failed load
+            // (a flaky network moment while opening a web page from a
+            // Muse chat) landed on the WebView's bare system error
+            // page with no way back, which is the dead-end try/retry
+            // screen Riki kept hitting. Now a failed main-frame load
+            // gets an Osvyn error card with a real reload button.
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request,
+                                        WebResourceError error) {
+                if (request.isForMainFrame()) {
+                    showPageError(request.getUrl().toString(),
+                            String.valueOf(error.getDescription()));
+                }
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest request,
+                                            WebResourceResponse response) {
+                if (request.isForMainFrame() && response.getStatusCode() >= 500) {
+                    showPageError(request.getUrl().toString(),
+                            "Server error " + response.getStatusCode());
+                }
             }
 
             @Override
@@ -429,7 +475,48 @@ public abstract class BaseProfileActivity extends Activity {
                 ps.setUserAgentString(DESKTOP_UA);
                 CookieManager.getInstance().setAcceptThirdPartyCookies(popup, true);
                 popup.addJavascriptInterface(new BlobBridge(), "OsvynBridge");
-                popup.setWebViewClient(new WebViewClient());
+                // Popup client (1.7.0): the popup used to get a bare
+                // WebViewClient, so a failed page inside a Muse
+                // window (an opened web page, a connector OAuth) died
+                // on the system error page and its downloads went
+                // nowhere. It now gets the download bridge injection,
+                // the shared download handler, and its own error bar
+                // with a working retry.
+                popup.setWebViewClient(new WebViewClient() {
+                    @Override
+                    public void onPageFinished(WebView v, String url) {
+                        if (url != null && url.contains("muse.ai")) {
+                            v.evaluateJavascript(BRIDGE_JS, null);
+                        }
+                    }
+
+                    @Override
+                    public void onReceivedError(WebView v, WebResourceRequest request,
+                                                WebResourceError error) {
+                        if (request.isForMainFrame()) {
+                            showPopupError(box, popup, request.getUrl().toString(),
+                                    String.valueOf(error.getDescription()));
+                        }
+                    }
+
+                    @Override
+                    public void onReceivedHttpError(WebView v, WebResourceRequest request,
+                                                    WebResourceResponse response) {
+                        if (request.isForMainFrame() && response.getStatusCode() >= 500) {
+                            showPopupError(box, popup, request.getUrl().toString(),
+                                    "Server error " + response.getStatusCode());
+                        }
+                    }
+                });
+                popup.setDownloadListener(new DownloadListener() {
+                    @Override
+                    public void onDownloadStart(String url, String userAgent,
+                                                String contentDisposition, String mimeType,
+                                                long contentLength) {
+                        handleDownload(popup, url, userAgent, contentDisposition,
+                                mimeType, contentLength);
+                    }
+                });
                 popup.setWebChromeClient(new WebChromeClient() {
                     @Override
                     public void onCloseWindow(WebView window) {
@@ -465,33 +552,8 @@ public abstract class BaseProfileActivity extends Activity {
             @Override
             public void onDownloadStart(String url, String userAgent, String contentDisposition,
                                         String mimeType, long contentLength) {
-                String name = URLUtil.guessFileName(url, contentDisposition, mimeType);
-                if (url != null && url.startsWith("blob:")) {
-                    // Blob downloads go through the injected bridge, the
-                    // same lesson the desktop build learned (its native
-                    // download events for blob: never finished either).
-                    String js = "window.__osvynUnduhUrl && window.__osvynUnduhUrl('"
-                            + url.replace("'", "") + "','" + name.replace("'", "") + "')";
-                    webView.evaluateJavascript(js, null);
-                    Toast.makeText(BaseProfileActivity.this, "Downloading " + name, Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                try {
-                    DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
-                    req.setTitle(name);
-                    req.setMimeType(mimeType);
-                    req.addRequestHeader("User-Agent", userAgent);
-                    String cookies = CookieManager.getInstance().getCookie(url);
-                    if (cookies != null) req.addRequestHeader("Cookie", cookies);
-                    req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                    req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
-                    DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-                    if (dm != null) dm.enqueue(req);
-                    Toast.makeText(BaseProfileActivity.this, "Downloading " + name, Toast.LENGTH_SHORT).show();
-                } catch (Exception e) {
-                    Toast.makeText(BaseProfileActivity.this,
-                            "Download failed: " + e.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
-                }
+                handleDownload(webView, url, userAgent, contentDisposition,
+                        mimeType, contentLength);
             }
         });
 
@@ -868,7 +930,9 @@ public abstract class BaseProfileActivity extends Activity {
             ContentValues cv = new ContentValues();
             cv.put(MediaStore.Downloads.DISPLAY_NAME, name);
             cv.put(MediaStore.Downloads.MIME_TYPE, type);
-            cv.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+            // Download folder (1.7.0): the Hub setting decides where
+            // blob downloads land, no longer nailed to Downloads.
+            cv.put(MediaStore.Downloads.RELATIVE_PATH, HubState.dlFolder(this));
             cv.put(MediaStore.Downloads.IS_PENDING, 1);
             Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
             if (uri == null) throw new IllegalStateException("MediaStore insert failed");
@@ -879,7 +943,7 @@ public abstract class BaseProfileActivity extends Activity {
             cv.clear();
             cv.put(MediaStore.Downloads.IS_PENDING, 0);
             getContentResolver().update(uri, cv, null, null);
-            return "Downloads/" + name;
+            return HubState.dlFolderLabel(this) + "/" + name;
         }
         File dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
         if (dir == null) throw new IllegalStateException("No download dir");
@@ -888,6 +952,216 @@ public abstract class BaseProfileActivity extends Activity {
             out.write(bytes);
         }
         return f.getAbsolutePath();
+    }
+
+    /**
+     * Shared download handling for the main view and popup windows
+     * (1.7.0: extracted so popup downloads stop going nowhere).
+     * Blob URLs go through the injected bridge; anything else goes to
+     * the DownloadManager, landing in the folder picked in the Hub.
+     */
+    private void handleDownload(WebView src, String url, String userAgent,
+                                String contentDisposition, String mimeType,
+                                long contentLength) {
+        String name = URLUtil.guessFileName(url, contentDisposition, mimeType);
+        if (url != null && url.startsWith("blob:")) {
+            // Blob downloads go through the injected bridge, the
+            // same lesson the desktop build learned (its native
+            // download events for blob: never finished either).
+            String js = "window.__osvynUnduhUrl && window.__osvynUnduhUrl('"
+                    + url.replace("'", "") + "','" + name.replace("'", "") + "')";
+            src.evaluateJavascript(js, null);
+            Toast.makeText(this, "Downloading " + name, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
+            req.setTitle(name);
+            req.setMimeType(mimeType);
+            req.addRequestHeader("User-Agent", userAgent);
+            String cookies = CookieManager.getInstance().getCookie(url);
+            if (cookies != null) req.addRequestHeader("Cookie", cookies);
+            req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            setDlDestination(req, name);
+            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            if (dm != null) dm.enqueue(req);
+            Toast.makeText(this, "Downloading " + name, Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this,
+                    "Download failed: " + e.getClass().getSimpleName(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** Maps the Hub's chosen download folder to a DownloadManager destination. */
+    private void setDlDestination(DownloadManager.Request req, String name) {
+        switch (HubState.dlFolder(this)) {
+            case "Download/Osvyn":
+                req.setDestinationInExternalPublicDir(
+                        Environment.DIRECTORY_DOWNLOADS, "Osvyn/" + name);
+                break;
+            case "Documents":
+                req.setDestinationInExternalPublicDir(
+                        Environment.DIRECTORY_DOCUMENTS, name);
+                break;
+            case "Pictures":
+                req.setDestinationInExternalPublicDir(
+                        Environment.DIRECTORY_PICTURES, name);
+                break;
+            case "Movies":
+                req.setDestinationInExternalPublicDir(
+                        Environment.DIRECTORY_MOVIES, name);
+                break;
+            case "Music":
+                req.setDestinationInExternalPublicDir(
+                        Environment.DIRECTORY_MUSIC, name);
+                break;
+            default:
+                req.setDestinationInExternalPublicDir(
+                        Environment.DIRECTORY_DOWNLOADS, name);
+        }
+    }
+
+    // ---------- page error card (1.7.0) ----------
+
+    private void showPageError(String url, String desc) {
+        if (stage == null || webView == null) return;
+        hidePageError();
+        failedUrl = url;
+        FrameLayout box = new FrameLayout(this);
+        box.setBackgroundColor(0xFF101014);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER_HORIZONTAL);
+        col.setPadding(dp(36), dp(24), dp(36), dp(24));
+        FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.gravity = Gravity.CENTER;
+        box.addView(col, clp);
+
+        TextView title = new TextView(this);
+        title.setText("This page could not be loaded");
+        title.setTextColor(0xFFE8E6DF);
+        title.setTextSize(17);
+        title.setTypeface(Fonts.semibold(this));
+        title.setGravity(Gravity.CENTER);
+        col.addView(title);
+
+        String host = "";
+        try {
+            String h = Uri.parse(url).getHost();
+            if (h != null) host = h;
+        } catch (Exception ignored) {
+        }
+        TextView sub = new TextView(this);
+        sub.setText((desc == null ? "Connection problem" : desc)
+                + (host.isEmpty() ? "" : "\n" + host));
+        sub.setTextColor(0xFFB9B6C4);
+        sub.setTextSize(13);
+        sub.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.topMargin = dp(8);
+        sub.setLayoutParams(slp);
+        col.addView(sub);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rlp.topMargin = dp(20);
+        row.setLayoutParams(rlp);
+        col.addView(row);
+
+        TextView retry = new TextView(this);
+        retry.setText("Try again");
+        retry.setTextColor(0xFFFFFFFF);
+        retry.setTextSize(14);
+        retry.setTypeface(Fonts.semibold(this));
+        android.graphics.drawable.GradientDrawable rbg =
+                new android.graphics.drawable.GradientDrawable();
+        rbg.setColor(0xFF2B6FF2);
+        rbg.setCornerRadius(dp(10));
+        retry.setBackground(rbg);
+        retry.setPadding(dp(20), dp(11), dp(20), dp(11));
+        retry.setOnClickListener(v -> {
+            String u = failedUrl;
+            hidePageError();
+            if (webView != null && u != null) webView.loadUrl(u);
+        });
+        row.addView(retry);
+
+        TextView back = new TextView(this);
+        back.setText("Back to Muse");
+        back.setTextColor(0xFFE8E6DF);
+        back.setTextSize(14);
+        back.setTypeface(Fonts.semibold(this));
+        android.graphics.drawable.GradientDrawable bbg =
+                new android.graphics.drawable.GradientDrawable();
+        bbg.setColor(0xFF1B1B21);
+        bbg.setStroke(dp(1), 0xFF26262E);
+        bbg.setCornerRadius(dp(10));
+        back.setBackground(bbg);
+        back.setPadding(dp(20), dp(11), dp(20), dp(11));
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        blp.leftMargin = dp(10);
+        back.setLayoutParams(blp);
+        back.setOnClickListener(v -> {
+            hidePageError();
+            if (webView != null) webView.loadUrl(ProfileStore.MUSE_URL);
+        });
+        row.addView(back);
+
+        stage.addView(box, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        errorBox = box;
+        if (Ui.motionOk(this)) {
+            box.setAlpha(0f);
+            box.animate().alpha(1f).setDuration(180).setInterpolator(Ui.EASE).start();
+        }
+    }
+
+    private void hidePageError() {
+        if (errorBox != null && stage != null) stage.removeView(errorBox);
+        errorBox = null;
+    }
+
+    /** Compact error bar pinned under a popup window, with its own retry. */
+    private void showPopupError(LinearLayout box, WebView popup, String url, String desc) {
+        if (box == null || popup == null) return;
+        View old = box.findViewWithTag("osvyn_popup_error");
+        if (old != null) box.removeView(old);
+        LinearLayout bar = new LinearLayout(this);
+        bar.setTag("osvyn_popup_error");
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setBackgroundColor(0xFF1B1B21);
+        bar.setPadding(dp(14), dp(9), dp(8), dp(9));
+
+        TextView msg = new TextView(this);
+        msg.setText("Page failed to load: " + (desc == null ? "connection problem" : desc));
+        msg.setTextColor(0xFFE8E6DF);
+        msg.setTextSize(12.5f);
+        msg.setMaxLines(2);
+        bar.addView(msg, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView retry = new TextView(this);
+        retry.setText("Try again");
+        retry.setTextColor(0xFF7FB0FF);
+        retry.setTextSize(13);
+        retry.setTypeface(Fonts.semibold(this));
+        retry.setPadding(dp(12), dp(6), dp(12), dp(6));
+        retry.setOnClickListener(v -> {
+            box.removeView(bar);
+            popup.loadUrl(url);
+        });
+        bar.addView(retry);
+
+        box.addView(bar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
     }
 
     private void toastOnUi(String msg) {
@@ -1163,6 +1437,11 @@ public abstract class BaseProfileActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // App lock gate (1.7.0): profiles ask for the PIN themselves
+        // after a long backgrounding, not only Splash at cold start.
+        if (!LockGate.enforceIfNeeded(this)) {
+            HubState.noteLockForeground(this);
+        }
         inForeground = true;
         // Foreground again: Call Mode no longer applies to this
         // profile, and its freeze check stops.
@@ -1187,6 +1466,7 @@ public abstract class BaseProfileActivity extends Activity {
     @Override
     protected void onPause() {
         inForeground = false;
+        HubState.noteLockBackground(this);
         if (webView != null) {
             applyWatcherSuspend();
             // Deliberately NO webView.onPause() here: pausing the page
@@ -1222,6 +1502,9 @@ public abstract class BaseProfileActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        // While the lock gate covers the screen, Back must not walk
+        // the page history behind it.
+        if (LockGate.isShowing(this)) return;
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
         } else {

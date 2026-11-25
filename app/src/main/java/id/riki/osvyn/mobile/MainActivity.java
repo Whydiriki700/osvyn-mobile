@@ -107,6 +107,8 @@ public class MainActivity extends Activity {
     private TextView lockDesc;
     private Button lockBtn;
     private Button lockPinBtn;
+    private TextView dlDesc;
+    private Button dlFolderBtn;
     private static final int REQ_EXPORT = 8001;
     private static final int REQ_IMPORT = 8002;
     private final Runnable hubTick = new Runnable() {
@@ -124,8 +126,17 @@ public class MainActivity extends Activity {
         return CallMode.freshOwner(this) + "|" + HubState.totalUnread(this)
                 + "|" + HubState.manualFreeze(this) + "|" + HubState.quietEnabled(this)
                 + "|" + HubState.eco(this) + "|" + HubState.lockEnabled(this)
-                + "|" + HubState.latestVersion(this);
+                + "|" + HubState.latestVersion(this)
+                + "|" + HubState.dlFolder(this) + "|" + sleepSignature();
     }
+    private String sleepSignature() {
+        StringBuilder sb = new StringBuilder();
+        for (int s = 1; s <= ProfileStore.MAX_PROFILES; s++) {
+            sb.append(HubState.isSleeping(this, s) ? '1' : '0');
+        }
+        return sb.toString();
+    }
+
     // Smoothness (1.4.1): profile rows animate in only on the first
     // Hub render. Replaying the staggered entrance on every onResume
     // made returning to the Hub feel slow; later refreshes are instant.
@@ -273,7 +284,7 @@ public class MainActivity extends Activity {
         listBox.setOrientation(LinearLayout.VERTICAL);
         root.addView(listBox);
 
-        TextView note = tv("Sleeping profiles keep their page alive in the background with the renderer parked, so the watcher still hears new messages and reopening is instant. The watcher runs while the app has not been force stopped.", 12.5f, INK3, null);
+        TextView note = tv("Profiles you leave alone park their renderer in the background, so the watcher still hears new messages and reopening is instant. Sleep on a profile card rests it fully: its page closes and it stops listening until you open it again. The watcher runs while the app has not been force stopped.", 12.5f, INK3, null);
         note.setLineSpacing(0, 1.35f);
         LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -381,9 +392,12 @@ public class MainActivity extends Activity {
 
         TextView[] d5 = new TextView[1];
         Button[] b5 = new Button[1];
+        Button[] b5b = new Button[1];
         settingsCard.addView(settingRow("Downloads",
                 "Files downloaded through the app, reopenable from here.",
-                d5, b5, "View", v -> showDownloads(), null, null, null));
+                d5, b5, "View", v -> showDownloads(), b5b, "Folder", v -> showDlFolderDialog()));
+        dlDesc = d5[0];
+        dlFolderBtn = b5b[0];
 
         TextView[] d6 = new TextView[1];
         Button[] b6 = new Button[1];
@@ -402,7 +416,7 @@ public class MainActivity extends Activity {
             settingsCard.addView(div, di);
         }
 
-        TextView foot = tv("Osvyn Mobile 1.6.1 - max " + ProfileStore.MAX_PROFILES + " profiles", 11, INK3, null);
+        TextView foot = tv("Osvyn Mobile 1.7.0 - max " + ProfileStore.MAX_PROFILES + " profiles", 11, INK3, null);
         foot.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -431,6 +445,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // App lock gate (1.7.0): the Splash gate alone was bypassable
+        // by re-entering from recents, so the Hub asks for the PIN
+        // itself after a long backgrounding. While the gate is up the
+        // foreground fact is deliberately not stamped (see LockGate).
+        if (!LockGate.enforceIfNeeded(this)) {
+            HubState.noteLockForeground(this);
+        }
         finishPendingWipes();
         refresh();
         maybeCheckUpdate();
@@ -442,6 +463,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         hubHandler.removeCallbacks(hubTick);
+        HubState.noteLockBackground(this);
         super.onPause();
     }
 
@@ -638,6 +660,7 @@ public class MainActivity extends Activity {
         ident.addView(name);
         String meta = deleting ? "Deleting... reopen it once to finish the wipe"
                 : inCall ? "In a call now"
+                : HubState.isSleeping(this, p.slot) ? "Asleep \u00b7 resting until reopened"
                 : opened ? "Asleep \u00b7 last opened " + relative(p.opened)
                 : "Not signed in yet";
         TextView metaTv = tv(meta, 12.5f, inCall ? GREEN : INK3,
@@ -673,6 +696,28 @@ public class MainActivity extends Activity {
         View spacer = new View(this);
         spacer.setLayoutParams(new LinearLayout.LayoutParams(0, 1, 1f));
         actions.addView(spacer);
+        if (!deleting) {
+            TextView rename = tv("Rename", 13.5f, INK2, Fonts.semibold(this));
+            rename.setBackground(Ui.press(Color.TRANSPARENT, darkTheme ? 0xFF22222A : 0xFFF1F1F4, dp(8), 0));
+            rename.setPadding(dp(10), dp(9), dp(10), dp(9));
+            rename.setOnClickListener(v -> {
+                Ui.haptic(v);
+                showRenameDialog(p);
+            });
+            actions.addView(rename);
+        }
+        if (!deleting && opened && !inCall && !HubState.isSleeping(this, p.slot)) {
+            TextView sleep = tv("Sleep", 13.5f, INK2, Fonts.semibold(this));
+            sleep.setBackground(Ui.press(Color.TRANSPARENT, darkTheme ? 0xFF22222A : 0xFFF1F1F4, dp(8), 0));
+            sleep.setPadding(dp(10), dp(9), dp(10), dp(9));
+            sleep.setOnClickListener(v -> {
+                Ui.haptic(v);
+                HubState.requestSleep(this, p.slot);
+                Toast.makeText(this, p.name + " is going to sleep", Toast.LENGTH_SHORT).show();
+                refresh();
+            });
+            actions.addView(sleep);
+        }
         TextView del = tv("Delete", 13.5f, RED, Fonts.semibold(this));
         del.setBackground(Ui.press(Color.TRANSPARENT, RED_BG, dp(8), 0));
         del.setPadding(dp(14), dp(9), dp(10), dp(9));
@@ -717,6 +762,8 @@ public class MainActivity extends Activity {
     }
 
     private void openProfile(ProfileStore.Profile p) {
+        // Opening a profile wakes it: any manual Sleep state clears.
+        HubState.clearSleep(this, p.slot);
         // Stamp last opened, like the desktop Hub "terakhir" record.
         List<ProfileStore.Profile> all = ProfileStore.load(this);
         for (ProfileStore.Profile x : all) {
@@ -1063,6 +1110,10 @@ public class MainActivity extends Activity {
                     : on ? "On. A PIN, or your fingerprint, is required to open Osvyn."
                     : "A PIN is set, but the lock is off.");
         }
+        if (dlDesc != null) {
+            dlDesc.setText("Files downloaded through the app land in "
+                    + HubState.dlFolderLabel(this) + ", reopenable from here.");
+        }
         if (updateBanner != null) {
             String latest = HubState.latestVersion(this);
             boolean newer = !latest.isEmpty()
@@ -1157,6 +1208,93 @@ public class MainActivity extends Activity {
                     Toast.makeText(this, "PIN saved, lock on", Toast.LENGTH_SHORT).show();
                     refresh();
                 }).show();
+    }
+
+    // ---------- Rename profile (1.7.0) ----------
+
+    private void showRenameDialog(ProfileStore.Profile p) {
+        EditText input = new EditText(this);
+        input.setText(p.name);
+        input.setSelection(p.name.length());
+        input.setHint("Profile name");
+        panelDialog("Rename profile", "The new name shows in the Hub and in the profile's tab bar the next time it opens.",
+                input, "Save", false, () -> {
+                    String name = input.getText().toString().trim();
+                    if (name.isEmpty()) {
+                        Toast.makeText(this, "Name cannot be empty", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    if (name.length() > 30) name = name.substring(0, 30);
+                    List<ProfileStore.Profile> all = new ArrayList<>();
+                    for (ProfileStore.Profile x : profiles) {
+                        if (x.slot == p.slot) {
+                            all.add(new ProfileStore.Profile(
+                                    x.id, name, x.slot, x.color, x.opened));
+                        } else {
+                            all.add(x);
+                        }
+                    }
+                    ProfileStore.save(this, all);
+                    Toast.makeText(this, "Renamed to " + name, Toast.LENGTH_SHORT).show();
+                    refresh();
+                }).show();
+    }
+
+    // ---------- Download folder (1.7.0) ----------
+
+    private void showDlFolderDialog() {
+        android.app.Dialog dlg = new android.app.Dialog(this);
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(round(PANEL, 16, 0));
+        card.setPadding(dp(24), dp(22), dp(24), dp(20));
+        card.addView(tv("Download folder", 18, INK, Fonts.bold(this)));
+        TextView sub = tv("New downloads land in the folder you pick here. Files already downloaded stay where they are.", 12.5f, INK3, null);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.topMargin = dp(6);
+        sub.setLayoutParams(slp);
+        card.addView(sub);
+
+        String current = HubState.dlFolder(this);
+        for (int i = 0; i < HubState.DL_FOLDER_VALUES.length; i++) {
+            final String value = HubState.DL_FOLDER_VALUES[i];
+            boolean active = value.equals(current);
+            TextView row = tv((active ? "●  " : "○  ") + HubState.DL_FOLDER_LABELS[i],
+                    14.5f, active ? BLUE_DARK : INK, Fonts.semibold(this));
+            row.setPadding(dp(6), dp(13), dp(6), dp(13));
+            row.setBackground(Ui.press(Color.TRANSPARENT, darkTheme ? 0xFF22222A : 0xFFF1F1F4, dp(8), 0));
+            row.setOnClickListener(v -> {
+                HubState.setDlFolder(this, value);
+                dlg.dismiss();
+                Toast.makeText(this, "Downloads now land in " + HubState.dlFolderLabel(this),
+                        Toast.LENGTH_SHORT).show();
+                refresh();
+            });
+            card.addView(row);
+            View dv = new View(this);
+            dv.setBackgroundColor(GARIS);
+            card.addView(dv, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+        }
+
+        Button close = smallButton("Close", PANEL, INK2, GARIS);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = dp(16);
+        clp.gravity = Gravity.RIGHT;
+        close.setLayoutParams(clp);
+        close.setOnClickListener(v -> dlg.dismiss());
+        card.addView(close);
+
+        dlg.setContentView(card);
+        if (dlg.getWindow() != null) {
+            dlg.getWindow().setBackgroundDrawable(
+                    new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+            int w = (int) (getResources().getDisplayMetrics().widthPixels * 0.88f);
+            dlg.getWindow().setLayout(w, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        dlg.show();
     }
 
     // ---------- Downloads history (1.5.0) ----------
