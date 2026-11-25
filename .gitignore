@@ -4,3 +4,5 @@
 signing-backup/
 app/build/
 .gradle/
+
+local.properties
